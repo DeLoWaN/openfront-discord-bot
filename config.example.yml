@@ -1,0 +1,5 @@
+token: "YOUR_DISCORD_BOT_TOKEN"
+admin_role_ids:
+  - 123456789012345678
+database_path: "bot.db"
+log_level: "INFO" # Options: CRITICAL, ERROR, WARNING, INFO, DEBUG

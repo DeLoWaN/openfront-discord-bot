@@ -1,0 +1,74 @@
+from __future__ import annotations
+
+import logging
+import re
+from datetime import datetime
+from typing import Iterable, Optional
+
+from .openfront import OpenFrontClient
+
+LOGGER = logging.getLogger(__name__)
+
+
+async def compute_wins_total(client: OpenFrontClient, player_id: str) -> int:
+    data = await client.fetch_player(player_id)
+    public_stats = (
+        data.get("stats", {}).get("Public", {}) if isinstance(data, dict) else {}
+    )
+    ffa_wins = int(
+        public_stats.get("Free For All", {}).get("Medium", {}).get("wins", 0) or 0
+    )
+    team_wins = int(public_stats.get("Team", {}).get("Medium", {}).get("wins", 0) or 0)
+    return ffa_wins + team_wins
+
+
+async def compute_wins_sessions_since_link(
+    client: OpenFrontClient,
+    player_id: str,
+    linked_at: datetime,
+) -> int:
+    sessions = await client.fetch_sessions(player_id)
+    wins = 0
+    for session in sessions:
+        end_time = client.session_end_time(session)
+        if not end_time:
+            continue
+        if end_time >= linked_at and client.session_win(session):
+            wins += 1
+    return wins
+
+
+async def compute_wins_sessions_with_clan(
+    client: OpenFrontClient,
+    player_id: str,
+    clan_tags: Iterable[str],
+) -> int:
+    sessions = await client.fetch_sessions(player_id)
+    normalized_tags = [tag.upper() for tag in clan_tags]
+    wins = 0
+    for session in sessions:
+        if "clan_tag" not in session:
+            match = re.match(r"\[([A-Za-z0-9]+)\]", session.get("username", ""))
+            clan_tag = match.group(1).upper() if match else ""
+        else:
+            clan_tag = str(session.get("clanTag", "")).upper()
+        if clan_tag == "":
+            continue
+        if normalized_tags and clan_tag not in normalized_tags:
+            continue
+        if client.session_win(session):
+            wins += 1
+    LOGGER.info(
+        "Clan wins for %s: %s wins across %s sessions (tags=%s)",
+        player_id,
+        wins,
+        len(sessions),
+        normalized_tags or "any",
+    )
+    return wins
+
+
+async def last_session_username(
+    client: OpenFrontClient, player_id: str
+) -> Optional[str]:
+    return await client.last_session_username(player_id)
