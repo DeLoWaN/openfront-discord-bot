@@ -1,24 +1,29 @@
 import asyncio
 import logging
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, Iterable, List, Optional
+from pathlib import Path
+from typing import Dict, Iterable, List, Optional, Set
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
+from .central_db import (
+    get_guild_entry,
+    init_central_db,
+    list_active_guilds,
+    register_guild,
+    remove_guild,
+)
 from .config import BotConfig, load_config
 from .models import (
     DEFAULT_COUNTING_MODE,
     DEFAULT_SYNC_INTERVAL,
-    Audit,
-    ClanTag,
-    RoleThreshold,
-    Settings,
-    User,
-    database,
-    init_db,
+    GuildModels,
+    init_guild_db,
     record_audit,
+    seed_admin_roles,
     upsert_role_threshold,
 )
 from .openfront import OpenFrontClient
@@ -38,22 +43,20 @@ LOGGER = logging.getLogger(__name__)
 COUNTING_MODES = ["total", "sessions_since_link", "sessions_with_clan"]
 
 
-def is_admin(interaction: discord.Interaction, config: BotConfig) -> bool:
-    member = interaction.user
-    if not isinstance(member, discord.Member):
-        return False
-    return any(role.id in config.admin_role_ids for role in member.roles)
-
-
-def get_guild(bot: commands.Bot) -> Optional[discord.Guild]:
-    if bot.guilds:
-        return bot.guilds[0]
-    return None
+@dataclass
+class GuildContext:
+    guild_id: int
+    database_path: str
+    models: GuildModels
+    admin_role_ids: Set[int]
+    sync_lock: asyncio.Lock
+    sync_event: asyncio.Event
+    sync_task: Optional[asyncio.Task] = None
 
 
 async def determine_target_role(
     guild: discord.Guild,
-    thresholds: List[RoleThreshold],
+    thresholds: List,
     win_count: int,
 ) -> Optional[discord.Role]:
     target_id = None
@@ -66,13 +69,13 @@ async def determine_target_role(
     return None
 
 
-def threshold_role_ids(thresholds: Iterable[RoleThreshold]) -> List[int]:
+def threshold_role_ids(thresholds: Iterable) -> List[int]:
     return [t.role_id for t in thresholds if t.role_id]
 
 
 async def apply_roles(
     member: discord.Member,
-    thresholds: List[RoleThreshold],
+    thresholds: List,
     win_count: int,
 ) -> Optional[int]:
     guild = member.guild
@@ -121,6 +124,15 @@ async def apply_roles(
     return target_role_id
 
 
+def admin_role_ids_from_permissions(guild: discord.Guild) -> List[int]:
+    role_ids: List[int] = []
+    for role in guild.roles:
+        perms = role.permissions
+        if perms.administrator or perms.manage_guild:
+            role_ids.append(role.id)
+    return role_ids
+
+
 class CountingBot(commands.Bot):
     def __init__(self, config: BotConfig):
         intents = discord.Intents.default()
@@ -129,74 +141,172 @@ class CountingBot(commands.Bot):
         super().__init__(command_prefix="!", intents=intents)
         self.config = config
         self.client = OpenFrontClient()
-        self._sync_lock = asyncio.Lock()
-        self._sync_event = asyncio.Event()
+        self.guild_contexts: Dict[int, GuildContext] = {}
+        self.guild_data_dir = Path("guild_data")
+        self.guild_data_dir.mkdir(parents=True, exist_ok=True)
+        init_central_db(config.central_database_path)
 
-    async def on_ready(self):
-        guild = get_guild(self)
-        if not guild:
-            LOGGER.warning("Bot is not in a guild yet.")
-            return
-        LOGGER.info("Bot ready in guild %s (%s)", guild.name, guild.id)
-        try:
-            settings = Settings.get_by_id(1)
-            LOGGER.info("Counting mode: %s", settings.counting_mode)
-        except Exception as exc:
-            LOGGER.warning("Could not load counting mode: %s", exc)
-        missing = []
-        for rt in RoleThreshold.select():
-            if rt.role_id and not guild.get_role(rt.role_id):
-                missing.append(rt.role_id)
-        if missing:
-            LOGGER.warning("Role IDs not found in guild: %s", missing)
+    def guild_db_path(self, guild_id: int) -> str:
+        return str(self.guild_data_dir / f"guild_{guild_id}.db")
 
-    async def setup_hook(self) -> None:
-        await self.tree.sync()
-        self.loop.create_task(self._sync_loop())
+    def get_guild_context(self, guild_id: int) -> Optional[GuildContext]:
+        return self.guild_contexts.get(guild_id)
 
     async def close(self) -> None:
+        for ctx in list(self.guild_contexts.values()):
+            await self._stop_sync_task(ctx)
+            ctx.models.db.close()
         await super().close()
         await self.client.close()
 
-    async def _sync_loop(self):
+    async def setup_hook(self) -> None:
+        await self.tree.sync()
+
+    async def on_ready(self):
+        LOGGER.info("Bot ready as %s", self.user)
+        await self._bootstrap_guilds_on_ready()
+
+    async def on_guild_join(self, guild: discord.Guild):
+        LOGGER.info("New guild joined: %s (%s)", guild.name, guild.id)
+        await self._ensure_guild_registered(guild)
+
+    async def on_guild_remove(self, guild: discord.Guild):
+        LOGGER.info("Removed from guild %s (%s); deleting data", guild.name, guild.id)
+        await self._delete_guild_data(guild.id)
+
+    async def _bootstrap_guilds_on_ready(self):
+        active_entries = {entry.guild_id: entry for entry in list_active_guilds()}
+        for guild in self.guilds:
+            try:
+                await self._ensure_guild_registered(
+                    guild,
+                    db_path=active_entries.get(guild.id).database_path
+                    if active_entries.get(guild.id)
+                    else None,
+                )
+            except Exception as exc:
+                LOGGER.exception("Failed to initialize guild %s: %s", guild.id, exc)
+
+        for guild_id, entry in active_entries.items():
+            if not self.get_guild(guild_id):
+                LOGGER.info(
+                    "Stale guild %s present in central DB but bot not in guild; deleting",
+                    guild_id,
+                )
+                await self._delete_guild_data(guild_id, entry.database_path)
+
+    def _load_admin_role_ids(self, models: GuildModels) -> Set[int]:
+        return {row.role_id for row in models.GuildAdminRole.select()}
+
+    def _member_is_admin(self, member: discord.Member, ctx: GuildContext) -> bool:
+        perms = member.guild_permissions
+        if perms.administrator or perms.manage_guild:
+            return True
+        return any(role.id in ctx.admin_role_ids for role in member.roles)
+
+    async def _ensure_guild_registered(
+        self, guild: discord.Guild, db_path: Optional[str] = None
+    ) -> GuildContext:
+        if guild.id in self.guild_contexts:
+            return self.guild_contexts[guild.id]
+
+        database_path = db_path or self.guild_db_path(guild.id)
+        db_was_present = Path(database_path).exists()
+        register_guild(guild.id, database_path)
+        if not db_was_present:
+            LOGGER.info("Creating database for guild %s at %s", guild.id, database_path)
+        models = init_guild_db(database_path, guild.id)
+        seed_admin_roles(models, admin_role_ids_from_permissions(guild))
+        admin_role_ids = self._load_admin_role_ids(models)
+        ctx = GuildContext(
+            guild_id=guild.id,
+            database_path=database_path,
+            models=models,
+            admin_role_ids=admin_role_ids,
+            sync_lock=asyncio.Lock(),
+            sync_event=asyncio.Event(),
+        )
+        self.guild_contexts[guild.id] = ctx
+        ctx.sync_task = self.loop.create_task(self._sync_loop(ctx))
+        return ctx
+
+    async def _stop_sync_task(self, ctx: GuildContext):
+        if ctx.sync_task and not ctx.sync_task.done():
+            ctx.sync_task.cancel()
+            try:
+                await ctx.sync_task
+            except asyncio.CancelledError:
+                pass
+        ctx.sync_task = None
+
+    async def _delete_guild_data(self, guild_id: int, db_path: Optional[str] = None):
+        ctx = self.guild_contexts.pop(guild_id, None)
+        if ctx:
+            await self._stop_sync_task(ctx)
+            try:
+                ctx.models.db.close()
+            except Exception:
+                pass
+            if db_path is None:
+                db_path = ctx.database_path
+        elif db_path is None:
+            entry = get_guild_entry(guild_id)
+            if entry:
+                db_path = entry.database_path
+        if db_path:
+            try:
+                Path(db_path).unlink(missing_ok=True)
+            except Exception as exc:
+                LOGGER.warning("Failed to delete guild DB %s: %s", db_path, exc)
+        removed = remove_guild(guild_id)
+        if not removed:
+            LOGGER.info("Guild %s was not present in central DB", guild_id)
+
+    async def _sync_loop(self, ctx: GuildContext):
         await self.wait_until_ready()
         while not self.is_closed():
             try:
-                await self.run_sync()
+                await self.run_sync(ctx)
             except Exception as exc:
-                LOGGER.exception("Background sync failed: %s", exc)
-            settings = Settings.get_by_id(1)
+                LOGGER.exception(
+                    "Background sync failed for guild %s: %s", ctx.guild_id, exc
+                )
+            settings = ctx.models.Settings.get_by_id(1)
             sleep_task = asyncio.create_task(
                 asyncio.sleep(settings.sync_interval_minutes * 60)
             )
-            event_task = asyncio.create_task(self._sync_event.wait())
+            event_task = asyncio.create_task(ctx.sync_event.wait())
             done, pending = await asyncio.wait(
                 {sleep_task, event_task},
                 return_when=asyncio.FIRST_COMPLETED,
             )
             for task in pending:
                 task.cancel()
-            self._sync_event.clear()
+            ctx.sync_event.clear()
 
-    async def run_sync(self, manual: bool = False) -> str:
-        if self._sync_lock.locked():
+    async def run_sync(self, ctx: GuildContext, manual: bool = False) -> str:
+        if ctx.sync_lock.locked():
             return "Sync already running"
-        async with self._sync_lock:
-            guild = get_guild(self)
+        async with ctx.sync_lock:
+            guild = self.get_guild(ctx.guild_id)
             if not guild:
-                return "No guild available"
+                return "Guild unavailable"
 
-            settings = Settings.get_by_id(1)
-            thresholds = list(RoleThreshold.select())
-            clan_tags = [ct.tag_text for ct in ClanTag.select()]
-            users = list(User.select())
+            settings = ctx.models.Settings.get_by_id(1)
+            thresholds = list(ctx.models.RoleThreshold.select())
+            clan_tags = [ct.tag_text for ct in ctx.models.ClanTag.select()]
+            users = list(ctx.models.User.select())
 
             processed = 0
             failures = 0
             for user in users:
                 member = guild.get_member(user.discord_user_id)
                 if not member:
-                    LOGGER.info("User %s not in guild, skipping", user.discord_user_id)
+                    LOGGER.info(
+                        "User %s not in guild %s, skipping",
+                        user.discord_user_id,
+                        guild.id,
+                    )
                     continue
                 try:
                     win_count = await self._compute_wins(
@@ -210,15 +320,19 @@ class CountingBot(commands.Bot):
                 except Exception as exc:
                     failures += 1
                     LOGGER.exception(
-                        "Failed syncing user %s: %s", user.discord_user_id, exc
+                        "Failed syncing user %s in guild %s: %s",
+                        user.discord_user_id,
+                        guild.id,
+                        exc,
                     )
             settings.last_sync_at = datetime.utcnow()
             settings.save()
             summary = f"Processed {processed} users, failures: {failures}"
-            LOGGER.info(summary)
+            guild_label = f"{guild.name} ({guild.id})" if guild else "unknown-guild"
+            LOGGER.info("Guild %s sync: %s", guild_label, summary)
             return summary
 
-    async def _compute_wins(self, user: User, mode: str, clan_tags: List[str]) -> int:
+    async def _compute_wins(self, user, mode: str, clan_tags: List[str]) -> int:
         player_id = user.player_id
         if mode == "total":
             return await compute_wins_total(self.client, player_id)
@@ -232,31 +346,59 @@ class CountingBot(commands.Bot):
             )
         raise ValueError(f"Unknown counting mode {mode}")
 
-
-bot_config: Optional[BotConfig] = None
-bot_instance: Optional[CountingBot] = None
-
-
-async def admin_check(interaction: discord.Interaction) -> bool:
-    assert bot_config is not None
-    if not is_admin(interaction, bot_config):
-        await interaction.response.send_message(
-            "You do not have permission to use this command.", ephemeral=True
-        )
-        return False
-    return True
+    def trigger_sync(self, ctx: GuildContext):
+        ctx.sync_event.set()
 
 
-def admin_required():
-    async def predicate(interaction: discord.Interaction) -> bool:
-        return await admin_check(interaction)
-
-    return app_commands.check(predicate)
+def _member_from_interaction(
+    interaction: discord.Interaction,
+) -> Optional[discord.Member]:
+    member = interaction.user
+    if not isinstance(member, discord.Member):
+        return None
+    return member
 
 
 # Command registrations
 async def setup_commands(bot: CountingBot):
     tree = bot.tree
+
+    async def resolve_context(
+        interaction: discord.Interaction,
+    ) -> Optional[GuildContext]:
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message(
+                "Commands must be used inside a guild.", ephemeral=True
+            )
+            return None
+        ctx = bot.get_guild_context(guild.id)
+        if not ctx:
+            await interaction.response.send_message(
+                "This guild is not registered. Re-invite the bot to initialize it.",
+                ephemeral=True,
+            )
+            return None
+        return ctx
+
+    async def require_admin(
+        interaction: discord.Interaction,
+    ) -> Optional[tuple[GuildContext, discord.Member]]:
+        ctx = await resolve_context(interaction)
+        if not ctx:
+            return None
+        member = _member_from_interaction(interaction)
+        if not member:
+            await interaction.response.send_message(
+                "Could not resolve guild member.", ephemeral=True
+            )
+            return None
+        if not bot._member_is_admin(member, ctx):
+            await interaction.response.send_message(
+                "You do not have permission to use this command.", ephemeral=True
+            )
+            return None
+        return ctx, member
 
     @bot.listen("on_interaction")
     async def log_app_command(interaction: discord.Interaction):
@@ -268,11 +410,14 @@ async def setup_commands(bot: CountingBot):
             payload = vars(data) if data else {}
         except Exception:
             payload = str(data)
+        guild = interaction.guild
+        guild_label = f"{guild.name} ({guild.id})" if guild else "unknown-guild"
         LOGGER.info(
-            "Slash command %s by %s (%s) with options %s",
+            "Slash command %s by %s (%s) in %s with options %s",
             cmd.qualified_name if cmd else "unknown",
             interaction.user,
             getattr(interaction.user, "id", "unknown"),
+            guild_label,
             payload,
         )
 
@@ -293,10 +438,13 @@ async def setup_commands(bot: CountingBot):
         name="link", description="Link your Discord user to an OpenFront player ID"
     )
     async def link(interaction: discord.Interaction, player_id: str):
+        ctx = await resolve_context(interaction)
+        if not ctx:
+            return
         await interaction.response.defer(ephemeral=True, thinking=True)
         username = await last_session_username(bot.client, player_id)
         now = datetime.utcnow()
-        User.insert(
+        ctx.models.User.insert(
             discord_user_id=interaction.user.id,
             player_id=player_id,
             linked_at=now,
@@ -304,28 +452,31 @@ async def setup_commands(bot: CountingBot):
         ).on_conflict_replace().execute()
         win_count = None
         try:
-            settings = Settings.get_by_id(1)
-            clan_tags = [ct.tag_text for ct in ClanTag.select()]
-            record = User.get_by_id(interaction.user.id)
+            settings = ctx.models.Settings.get_by_id(1)
+            clan_tags = [ct.tag_text for ct in ctx.models.ClanTag.select()]
+            record = ctx.models.User.get_by_id(interaction.user.id)
             win_count = await bot._compute_wins(
                 record, settings.counting_mode, clan_tags
             )
             record.last_win_count = win_count
-            guild = get_guild(bot)
+            guild = interaction.guild
             member: Optional[discord.Member] = None
             if isinstance(interaction.user, discord.Member):
                 member = interaction.user
             elif guild:
                 member = guild.get_member(record.discord_user_id)
-            thresholds = list(RoleThreshold.select())
+            thresholds = list(ctx.models.RoleThreshold.select())
             if member:
                 record.last_role_id = await apply_roles(member, thresholds, win_count)
             record.save()
         except Exception as exc:
             LOGGER.warning(
-                "Immediate sync after link failed for %s: %s", interaction.user.id, exc
+                "Immediate sync after link failed for %s in guild %s: %s",
+                interaction.user.id,
+                ctx.guild_id,
+                exc,
             )
-        record_audit(interaction.user.id, "link", {"player_id": player_id})
+        record_audit(ctx.models, interaction.user.id, "link", {"player_id": player_id})
         lines = [
             f"Linked to player `{player_id}`. Last session username: `{username or 'unknown'}`"
         ]
@@ -337,8 +488,13 @@ async def setup_commands(bot: CountingBot):
 
     @tree.command(name="unlink", description="Remove your link")
     async def unlink(interaction: discord.Interaction):
-        User.delete().where(User.discord_user_id == interaction.user.id).execute()
-        record_audit(interaction.user.id, "unlink", {})
+        ctx = await resolve_context(interaction)
+        if not ctx:
+            return
+        ctx.models.User.delete().where(
+            ctx.models.User.discord_user_id == interaction.user.id
+        ).execute()
+        record_audit(ctx.models, interaction.user.id, "unlink", {})
         await interaction.response.send_message("Unlinked.", ephemeral=True)
 
     @tree.command(name="status", description="Show link status")
@@ -346,12 +502,19 @@ async def setup_commands(bot: CountingBot):
     async def status(
         interaction: discord.Interaction, user: Optional[discord.Member] = None
     ):
-        target = user or interaction.user
-        if user and not is_admin(interaction, bot_config):
-            await interaction.response.send_message("Admin only.", ephemeral=True)
+        ctx = await resolve_context(interaction)
+        if not ctx:
             return
-        record = User.get_or_none(User.discord_user_id == target.id)
-        settings = Settings.get_by_id(1)
+        target = user or interaction.user
+        if user:
+            requester = _member_from_interaction(interaction)
+            if not requester or not bot._member_is_admin(requester, ctx):
+                await interaction.response.send_message("Admin only.", ephemeral=True)
+                return
+        record = ctx.models.User.get_or_none(
+            ctx.models.User.discord_user_id == target.id
+        )
+        settings = ctx.models.Settings.get_by_id(1)
         if not record:
             await interaction.response.send_message("Not linked.", ephemeral=True)
             return
@@ -364,104 +527,133 @@ async def setup_commands(bot: CountingBot):
         await interaction.response.send_message(msg, ephemeral=True)
 
     @tree.command(name="recompute", description="Force recompute for a user or all")
-    @admin_required()
     @app_commands.describe(user="Optional user; if omitted, recompute all")
     async def recompute(
         interaction: discord.Interaction, user: Optional[discord.Member] = None
     ):
+        admin_ctx = await require_admin(interaction)
+        if not admin_ctx:
+            return
+        ctx, _member = admin_ctx
         await interaction.response.defer(ephemeral=True, thinking=True)
         if user:
-            record = User.get_or_none(User.discord_user_id == user.id)
+            record = ctx.models.User.get_or_none(
+                ctx.models.User.discord_user_id == user.id
+            )
             if not record:
                 await interaction.followup.send("User not linked.", ephemeral=True)
                 return
-            settings = Settings.get_by_id(1)
-            clan_tags = [ct.tag_text for ct in ClanTag.select()]
+            settings = ctx.models.Settings.get_by_id(1)
+            clan_tags = [ct.tag_text for ct in ctx.models.ClanTag.select()]
             win_count = await bot._compute_wins(
                 record, settings.counting_mode, clan_tags
             )
             record.last_win_count = win_count
             member = user
-            thresholds = list(RoleThreshold.select())
+            thresholds = list(ctx.models.RoleThreshold.select())
             record.last_role_id = await apply_roles(member, thresholds, win_count)
             record.save()
-            record_audit(interaction.user.id, "recompute_user", {"user": user.id})
+            record_audit(
+                ctx.models, interaction.user.id, "recompute_user", {"user": user.id}
+            )
             await interaction.followup.send(
                 f"Recomputed {user.display_name}: {win_count} wins", ephemeral=True
             )
         else:
-            summary = await bot.run_sync(manual=True)
-            record_audit(interaction.user.id, "recompute_all", {})
+            summary = await bot.run_sync(ctx, manual=True)
+            record_audit(ctx.models, interaction.user.id, "recompute_all", {})
             await interaction.followup.send(summary, ephemeral=True)
 
     @tree.command(name="sync", description="Trigger immediate sync")
-    @admin_required()
     async def sync(interaction: discord.Interaction):
+        admin_ctx = await require_admin(interaction)
+        if not admin_ctx:
+            return
+        ctx, _member = admin_ctx
         await interaction.response.defer(ephemeral=True, thinking=True)
-        summary = await bot.run_sync(manual=True)
-        record_audit(interaction.user.id, "sync", {})
+        summary = await bot.run_sync(ctx, manual=True)
+        record_audit(ctx.models, interaction.user.id, "sync", {})
         await interaction.followup.send(summary, ephemeral=True)
 
     @tree.command(name="set_mode", description="Set counting mode")
-    @admin_required()
     @app_commands.describe(mode="total | sessions_since_link | sessions_with_clan")
     async def set_mode(interaction: discord.Interaction, mode: str):
+        admin_ctx = await require_admin(interaction)
+        if not admin_ctx:
+            return
+        ctx, _member = admin_ctx
         if mode not in COUNTING_MODES:
             await interaction.response.send_message("Invalid mode", ephemeral=True)
             return
-        settings = Settings.get_by_id(1)
+        settings = ctx.models.Settings.get_by_id(1)
         settings.counting_mode = mode
         settings.save()
-        record_audit(interaction.user.id, "set_mode", {"mode": mode})
+        record_audit(ctx.models, interaction.user.id, "set_mode", {"mode": mode})
         await interaction.response.send_message(
             f"Counting mode set to {mode}", ephemeral=True
         )
 
     @tree.command(name="set_interval", description="Set sync interval (minutes)")
-    @admin_required()
     async def set_interval(interaction: discord.Interaction, minutes: int):
+        admin_ctx = await require_admin(interaction)
+        if not admin_ctx:
+            return
+        ctx, _member = admin_ctx
         minutes = max(5, min(24 * 60, minutes))
-        settings = Settings.get_by_id(1)
+        settings = ctx.models.Settings.get_by_id(1)
         settings.sync_interval_minutes = minutes
         settings.save()
-        record_audit(interaction.user.id, "set_interval", {"minutes": minutes})
+        record_audit(
+            ctx.models, interaction.user.id, "set_interval", {"minutes": minutes}
+        )
+        bot.trigger_sync(ctx)
         await interaction.response.send_message(
             f"Sync interval set to {minutes} minutes", ephemeral=True
         )
 
     @tree.command(name="add_role", description="Add or update a threshold role")
-    @admin_required()
     async def add_role(
         interaction: discord.Interaction,
         wins: int,
         role: discord.Role,
         role_name: str,
     ):
-        upsert_role_threshold(wins, role.id, role_name)
+        admin_ctx = await require_admin(interaction)
+        if not admin_ctx:
+            return
+        ctx, _member = admin_ctx
+        upsert_role_threshold(ctx.models, wins, role.id, role_name)
         record_audit(
-            interaction.user.id, "add_role", {"wins": wins, "role_id": role.id}
+            ctx.models,
+            interaction.user.id,
+            "add_role",
+            {"wins": wins, "role_id": role.id},
         )
         await interaction.response.send_message("Role threshold saved.", ephemeral=True)
 
     @tree.command(name="remove_role", description="Remove a threshold role")
-    @admin_required()
     async def remove_role(
         interaction: discord.Interaction,
         wins: Optional[int] = None,
         role: Optional[discord.Role] = None,
     ):
+        admin_ctx = await require_admin(interaction)
+        if not admin_ctx:
+            return
+        ctx, _member = admin_ctx
         if wins is None and role is None:
             await interaction.response.send_message(
                 "Provide wins or role.", ephemeral=True
             )
             return
-        query = RoleThreshold.delete()
+        query = ctx.models.RoleThreshold.delete()
         if wins is not None:
-            query = query.where(RoleThreshold.wins == wins)
+            query = query.where(ctx.models.RoleThreshold.wins == wins)
         if role is not None:
-            query = query.where(RoleThreshold.role_id == role.id)
+            query = query.where(ctx.models.RoleThreshold.role_id == role.id)
         deleted = query.execute()
         record_audit(
+            ctx.models,
             interaction.user.id,
             "remove_role",
             {"wins": wins, "role": role.id if role else None},
@@ -472,7 +664,10 @@ async def setup_commands(bot: CountingBot):
 
     @tree.command(name="list_roles", description="List role thresholds")
     async def list_roles(interaction: discord.Interaction):
-        rows = RoleThreshold.select().order_by(RoleThreshold.wins)
+        ctx = await resolve_context(interaction)
+        if not ctx:
+            return
+        rows = ctx.models.RoleThreshold.select().order_by(ctx.models.RoleThreshold.wins)
         lines = [
             f"{row.wins}: {row.role_name} (role id: {row.role_id})" for row in rows
         ]
@@ -481,45 +676,62 @@ async def setup_commands(bot: CountingBot):
         )
 
     @tree.command(name="clan_tag_add", description="Add a clan tag")
-    @admin_required()
     async def clan_tag_add(interaction: discord.Interaction, tag: str):
+        admin_ctx = await require_admin(interaction)
+        if not admin_ctx:
+            return
+        ctx, _member = admin_ctx
         tag_norm = tag.upper()
-        ClanTag.insert(tag_text=tag_norm).on_conflict_ignore().execute()
-        record_audit(interaction.user.id, "clan_tag_add", {"tag": tag_norm})
+        ctx.models.ClanTag.insert(tag_text=tag_norm).on_conflict_ignore().execute()
+        record_audit(ctx.models, interaction.user.id, "clan_tag_add", {"tag": tag_norm})
         await interaction.response.send_message(
             f"Clan tag '{tag_norm}' added", ephemeral=True
         )
 
     @tree.command(name="clan_tag_remove", description="Remove a clan tag")
-    @admin_required()
     async def clan_tag_remove(interaction: discord.Interaction, tag: str):
-        tag_norm = tag.lower()
-        deleted = ClanTag.delete().where(ClanTag.tag_text == tag_norm).execute()
-        record_audit(interaction.user.id, "clan_tag_remove", {"tag": tag_norm})
+        admin_ctx = await require_admin(interaction)
+        if not admin_ctx:
+            return
+        ctx, _member = admin_ctx
+        tag_norm = tag.upper()
+        deleted = (
+            ctx.models.ClanTag.delete().where(ctx.models.ClanTag.tag_text == tag_norm)
+        ).execute()
+        record_audit(
+            ctx.models, interaction.user.id, "clan_tag_remove", {"tag": tag_norm}
+        )
         await interaction.response.send_message(
             f"Removed {deleted} entries", ephemeral=True
         )
 
     @tree.command(name="list_clans", description="List clan tags")
     async def list_clans(interaction: discord.Interaction):
-        tags = [ct.tag_text for ct in ClanTag.select()]
+        ctx = await resolve_context(interaction)
+        if not ctx:
+            return
+        tags = [ct.tag_text for ct in ctx.models.ClanTag.select()]
         await interaction.response.send_message(
             ", ".join(tags) or "No clans configured", ephemeral=True
         )
 
     @tree.command(name="link_override", description="Admin override link")
-    @admin_required()
     async def link_override(
         interaction: discord.Interaction, user: discord.Member, player_id: str
     ):
+        admin_ctx = await require_admin(interaction)
+        if not admin_ctx:
+            return
+        ctx, _member = admin_ctx
         now = datetime.utcnow()
-        User.insert(
+        ctx.models.User.insert(
             discord_user_id=user.id,
             player_id=player_id,
             linked_at=now,
             last_win_count=0,
         ).on_conflict_replace().execute()
         record_audit(
+            ctx.models,
             interaction.user.id,
             "link_override",
             {"user": user.id, "player_id": player_id},
@@ -529,11 +741,18 @@ async def setup_commands(bot: CountingBot):
         )
 
     @tree.command(name="audit", description="Show recent audit events")
-    @admin_required()
     async def audit(interaction: discord.Interaction, page: int = 1):
+        admin_ctx = await require_admin(interaction)
+        if not admin_ctx:
+            return
+        ctx, _member = admin_ctx
         page = max(1, page)
         limit = 20
-        query = Audit.select().order_by(Audit.id.desc()).paginate(page, limit)
+        query = (
+            ctx.models.Audit.select()
+            .order_by(ctx.models.Audit.id.desc())
+            .paginate(page, limit)
+        )
         lines = [
             f"{row.id}: actor={row.actor_discord_id} action={row.action} payload={row.payload}"
             for row in query
@@ -542,17 +761,103 @@ async def setup_commands(bot: CountingBot):
             "\n".join(lines) or "No audit entries", ephemeral=True
         )
 
+    @tree.command(name="admin_role_add", description="Add an admin role for this guild")
+    async def admin_role_add(interaction: discord.Interaction, role: discord.Role):
+        admin_ctx = await require_admin(interaction)
+        if not admin_ctx:
+            return
+        ctx, _member = admin_ctx
+        ctx.models.GuildAdminRole.insert(role_id=role.id).on_conflict_ignore().execute()
+        ctx.admin_role_ids = bot._load_admin_role_ids(ctx.models)
+        record_audit(
+            ctx.models, interaction.user.id, "admin_role_add", {"role_id": role.id}
+        )
+        await interaction.response.send_message(
+            f"Added admin role {role.name} ({role.id})", ephemeral=True
+        )
+
+    @tree.command(
+        name="admin_role_remove", description="Remove an admin role for this guild"
+    )
+    async def admin_role_remove(interaction: discord.Interaction, role: discord.Role):
+        admin_ctx = await require_admin(interaction)
+        if not admin_ctx:
+            return
+        ctx, _member = admin_ctx
+        deleted = (
+            ctx.models.GuildAdminRole.delete().where(
+                ctx.models.GuildAdminRole.role_id == role.id
+            )
+        ).execute()
+        ctx.admin_role_ids = bot._load_admin_role_ids(ctx.models)
+        record_audit(
+            ctx.models, interaction.user.id, "admin_role_remove", {"role_id": role.id}
+        )
+        await interaction.response.send_message(
+            f"Removed {deleted} entries for role {role.name} ({role.id})",
+            ephemeral=True,
+        )
+
+    @tree.command(name="admin_roles", description="List admin roles for this guild")
+    async def admin_roles(interaction: discord.Interaction):
+        admin_ctx = await require_admin(interaction)
+        if not admin_ctx:
+            return
+        ctx, _member = admin_ctx
+        roles = list(ctx.models.GuildAdminRole.select())
+        lines = []
+        for row in roles:
+            role_obj = (
+                interaction.guild.get_role(row.role_id) if interaction.guild else None
+            )
+            label = role_obj.name if role_obj else "unknown role"
+            lines.append(f"{row.role_id} ({label})")
+        await interaction.response.send_message(
+            "\n".join(lines) or "No admin roles configured.", ephemeral=True
+        )
+
+    @tree.command(
+        name="guild_remove",
+        description="Remove this guild from the bot and delete its data",
+    )
+    @app_commands.describe(confirm="Set to true to confirm deletion")
+    async def guild_remove(interaction: discord.Interaction, confirm: bool = False):
+        admin_ctx = await require_admin(interaction)
+        if not admin_ctx:
+            return
+        ctx, member = admin_ctx
+        if not confirm:
+            await interaction.response.send_message(
+                "This will delete all data for this guild. Re-run with confirm=true to proceed.",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.send_message(
+            "Removing guild data...", ephemeral=True
+        )
+        await bot._delete_guild_data(ctx.guild_id, ctx.database_path)
+        LOGGER.info(
+            "Guild %s data removed by %s (%s)",
+            ctx.guild_id,
+            member,
+            member.id,
+        )
+        if interaction.guild:
+            try:
+                await interaction.guild.leave()
+            except Exception as exc:
+                LOGGER.warning(
+                    "Failed to leave guild %s after removal: %s", ctx.guild_id, exc
+                )
+
 
 async def main():
-    global bot_config, bot_instance
     bot_config = load_config()
-    # Apply log level from config
     logging.getLogger().setLevel(bot_config.log_level)
     LOGGER.setLevel(bot_config.log_level)
-    init_db(bot_config.database_path)
-    bot_instance = CountingBot(bot_config)
-    await setup_commands(bot_instance)
-    await bot_instance.start(bot_config.token)
+    bot = CountingBot(bot_config)
+    await setup_commands(bot)
+    await bot.start(bot_config.token)
 
 
 if __name__ == "__main__":

@@ -27,9 +27,8 @@ cp config.example.yml config.yml
 2) Edit `config.yml`:
 ```yaml
 token: "DISCORD_BOT_TOKEN"
-admin_role_ids:
-  - 123456789012345678   # IDs of roles allowed to run admin commands
-database_path: "bot.db"  # optional; defaults to bot.db in the repo
+central_database_path: "central.db"  # optional; defaults to central.db in the repo
+log_level: "INFO"                    # CRITICAL | ERROR | WARNING | INFO | DEBUG
 ```
 - Optionally set `CONFIG_PATH=/absolute/path/to/config.yml` if the file lives elsewhere.
 
@@ -38,13 +37,16 @@ database_path: "bot.db"  # optional; defaults to bot.db in the repo
 source .venv/bin/activate
 python -m src.bot
 ```
-- On first start the SQLite DB is created and default role thresholds are seeded (role_id=0 placeholders). Slash commands are auto-registered in the guild the bot is in.
+- A central registry DB is created at `central.db`, and when the bot joins a guild it creates `guild_data/guild_<guild_id>.db` with seeded tables and default thresholds.
+- Admin roles are auto-seeded from guild roles that have `Administrator` or `Manage Guild`. Use `/admin_role_add` and `/admin_role_remove` to tune access later.
+- Slash commands are auto-registered in every guild the bot is in.
 - The bot syncs every 60 minutes by default; adjust later with `/set_interval`.
 
 ## After first launch
-- Assign real role IDs to thresholds: from an admin account (with a role listed in `admin_role_ids`), run `/add_role wins:<n> role:<select role> role_name:<display name>`. Repeat for each threshold, then check with `/list_roles`.
-- Set clan tags (for the default `sessions_with_clan` mode) via `/set_clan TAG`, or switch counting mode with `/set_mode total|sessions_since_link|sessions_with_clan`.
+- Assign real role IDs to thresholds: from an admin account (with `Administrator`, `Manage Guild`, or an admin role), run `/add_role wins:<n> role:<select role> role_name:<display name>`. Repeat for each threshold, then check with `/list_roles`.
+- Set clan tags (for the default `sessions_with_clan` mode) via `/clan_tag_add TAG`, or switch counting mode with `/set_mode total|sessions_since_link|sessions_with_clan`.
 - Test linking and role assignment with `/link <player_id>` and `/sync` (admin) or wait for the next scheduled sync.
+- To wipe data and leave a guild, run `/guild_remove confirm:true` (admin only) and re-invite the bot later if needed.
 
 ## Systemd example (production)
 Create `/etc/systemd/system/counting-bot.service`:

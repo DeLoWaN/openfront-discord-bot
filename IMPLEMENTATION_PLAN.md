@@ -1,12 +1,12 @@
 # Implementation Plan
 
 ## Goal & Scope
-- Single-guild Discord bot that tracks openfront.io player wins and assigns Discord roles when thresholds are reached.
+- Multi-guild Discord bot; tracks openfront.io player wins per guild and assigns Discord roles when thresholds are reached. Each guild is isolated in its own SQLite database.
 - Three selectable counting modes (stored in DB, switchable via admin command):
   1) `total`: use `/public/player/:playerId` to sum public ffa/teams wins.
   2) `sessions_since_link`: use `/public/player/:playerId/sessions`, counting wins where `endTime >= linked_at`.
   3) `sessions_with_clan` (default): use `/public/player/:playerId/sessions`, counting wins where username contains any stored clan tag (case-insensitive substring), no time bound.
-- Single guild only; multiple guilds require separate bot instances and databases.
+- Supports multiple guilds in a single bot instance; each guild uses its own database for isolation.
 
 ## OpenFront API Reference
 - Documentation: https://github.com/openfrontio/OpenFrontIO/blob/main/docs/API.md
@@ -16,27 +16,9 @@
   - `GET https://api.openfront.io/public/player/:playerId/sessions`: list of sessions with username, endTime, win flag, game info; handle pagination if present.
 - Only completed/public games are counted. No API key required. Implement exponential backoff with jitter on 429/5xx.
 
-## Discord Role Thresholds (prepopulate DB; role_name exact)
-- 2:  `UN Recruit | Basic | 2 wins`
-- 5:  `UN Trainee | Novice | 5 wins`
-- 10: `UN Novice | Beginner | 10 wins`
-- 15: `UN Cadet | Junior Apprentice | 15 wins`
-- 20: `UN Operator | Apprentice | 20 wins`
-- 25: `UN Specialist | Junior | 25 wins`
-- 40: `UN Agent | Intermediate | 40 wins`
-- 60: `UN Elite Agent | Skilled | 60 wins`
-- 100: `UN Veteran | Advanced | 100 wins`
-- 150: `UN Warborn | Combat Specialist | 150 wins`
-- 200: `UN Bloodhound | Combat Expert | 200 wins`
-- 250: `UN Ace | Pro | 250 wins`
-- 350: `UN Champion | Heroic | 350 wins`
-- 500: `UN Legend | Expert | 500 wins`
-- 600: `UN Warden | Elite Council | 600 wins`
-- 700: `UN Champion | Supreme Strategist | 700 wins`
-
 ## Configuration
-- YAML file (only): `token`, `admin_role_ids` (list of role IDs allowed to run admin commands), optional `database_path`.
-- All other settings live in DB and are managed via commands.
+- YAML file: `token`, optional `log_level`, and `central_database_path` (registry of guilds). No per-guild entries are required.
+- All other settings live in per-guild DBs and are managed via commands.
 
 ## Data Model (Peewee, SQLite)
 - `users(discord_user_id PK int64, player_id text, linked_at datetime UTC, last_win_count int default 0, last_role_id int64 nullable, created_at/updated_at)`.
@@ -103,7 +85,7 @@
 - Integration smoke in a test guild: `/link`, `/sync`, verify role assignment; change mode and rerun.
 
 ## Deployment Plan
-- Fill `config.yml` with token/admin_role_ids and optional DB path.
-- Create bot in Discord; invite with role management permission to target guild; ensure role IDs in DB match guild roles.
+- Fill `config.yml` with the bot token and optional `central_database_path` and `log_level`.
+- Create bot in Discord; invite with role management permission to target guild; ensure role IDs in DB match guild roles after seeding.
 - Run bot process (systemd/docker/container); monitor logs for missing roles and sync outcomes.
 - Adjust sync interval via `/set_interval` if rate limits hit; switch modes via `/set_mode` as needed.
