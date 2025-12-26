@@ -11,6 +11,7 @@ pytest = "*"
 pytest-asyncio = "*"
 
 [dev-packages]
+ruff = "*"
 
 [pipenv]
 allow_prereleases = false

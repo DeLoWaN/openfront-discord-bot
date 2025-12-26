@@ -1,4 +1,5 @@
 import asyncio
+import importlib.util
 import sys
 import types
 from pathlib import Path
@@ -104,9 +105,7 @@ def _install_discord_stub():
     sys.modules["discord.app_commands"] = app_commands
 
 
-try:
-    import discord as _discord  # type: ignore
-except ModuleNotFoundError:
+if importlib.util.find_spec("discord") is None:
     _install_discord_stub()
 
 
@@ -341,9 +340,7 @@ def _install_peewee_stub():
     sys.modules["peewee"] = peewee
 
 
-try:
-    import peewee as _peewee  # type: ignore
-except ModuleNotFoundError:
+if importlib.util.find_spec("peewee") is None:
     _install_peewee_stub()
 
 

@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set
 
@@ -18,8 +18,6 @@ from .central_db import (
 )
 from .config import BotConfig, load_config
 from .models import (
-    DEFAULT_COUNTING_MODE,
-    DEFAULT_SYNC_INTERVAL,
     GuildModels,
     init_guild_db,
     record_audit,
@@ -791,7 +789,6 @@ async def setup_commands(bot: CountingBot):
         ctx = await resolve_context(interaction)
         if not ctx:
             return
-        guild = interaction.guild
         rows = ctx.models.RoleThreshold.select().order_by(ctx.models.RoleThreshold.wins)
         lines = []
         for row in rows:
