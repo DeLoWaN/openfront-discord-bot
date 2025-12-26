@@ -36,10 +36,10 @@
 - `/set_interval minutes`: admin-only; update settings.sync_interval_minutes (clamped bounds); audit.
 - `/roles_add wins role_id role_name`: admin-only; insert/update threshold; audit.
 - `/roles_remove wins|role_id`: admin-only; delete threshold; audit.
-- `/roles_list`: list thresholds ordered asc.
+- `/roles`: list thresholds ordered asc.
 - `/set_clan tag`: admin-only; add case-insensitive tag; audit.
 - `/remove_clan tag`: admin-only; remove tag; audit.
-- `/list_clans`: list tags.
+- `/clans_list`: list tags.
 - `/link_override user player_id`: admin-only; override link; audit.
 - `/audit [page]`: admin-only; list last 20 audit entries per page.
 

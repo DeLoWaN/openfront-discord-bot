@@ -111,8 +111,8 @@ def test_run_sync_sessions_with_clan(tmp_path):
     )
     bot.get_guild = cast(Any, lambda gid: guild if gid == ctx.guild_id else None)
     sessions = [
-        {"username": "[ABC]Player", "hasWon": True},
-        {"username": "[XYZ]Other", "hasWon": True},
+        {"username": "[ABC]Player", "hasWon": True, "gameType": "Public"},
+        {"username": "[XYZ]Other", "hasWon": True, "gameType": "Public"},
     ]
     bot.client = cast(Any, FakeOpenFront(sessions=sessions))
 

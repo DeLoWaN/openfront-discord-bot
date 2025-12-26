@@ -634,17 +634,52 @@ async def setup_commands(bot: CountingBot):
         if not record:
             await interaction.response.send_message("Not linked.", ephemeral=True)
             return
+        role_line = "Last role: none"
+        if record.last_role_id:
+            role = (
+                interaction.guild.get_role(record.last_role_id)
+                if interaction.guild
+                else None
+            )
+            if role:
+                role_line = f"Last role: <@&{role.id}>"
+        counting_mode = settings.counting_mode
+        clans_line = ""
+        if counting_mode == "sessions_with_clan":
+            clan_tags = [ct.tag_text for ct in ctx.models.ClanTag.select()]
+            clans_line = f" (tags: {', '.join(clan_tags) if clan_tags else 'none'})"
+        linked_str = (
+            record.linked_at.strftime("%Y-%m-%d %H:%M UTC")
+            if record.linked_at
+            else "unknown"
+        )
+        last_sync_str = (
+            settings.last_sync_at.strftime("%Y-%m-%d %H:%M UTC")
+            if settings.last_sync_at
+            else "never"
+        )
+        mode_descriptions = {
+            "total": "Total wins",
+            "sessions_since_link": "Wins since you linked",
+            "sessions_with_clan": "Wins in sessions with clan tags",
+        }
+        mode_label = mode_descriptions.get(counting_mode, counting_mode)
         msg = (
             f"Player ID: `{record.player_id}`\n"
-            f"Linked at: {record.linked_at.isoformat()}\n"
+            f"Linked: {linked_str}\n"
             f"Last wins: {record.last_win_count}\n"
-            f"Last sync: {settings.last_sync_at.isoformat() if settings.last_sync_at else 'never'}"
+            f"Counting mode: {mode_label}{clans_line}\n"
+            f"{role_line}\n"
+            f"Last sync: {last_sync_str}"
         )
         await interaction.response.send_message(msg, ephemeral=True)
 
-    @tree.command(name="recompute", description="Force recompute for a user or all")
-    @app_commands.describe(user="Optional user; if omitted, recompute all")
-    async def recompute(
+    @tree.command(
+        name="sync",
+        description="Trigger immediate sync (optionally for a single user)",
+    )
+    @app_commands.describe(user="Optional user; if omitted, sync all linked users")
+    async def sync(
         interaction: discord.Interaction, user: Optional[discord.Member] = None
     ):
         admin_ctx = await require_admin(interaction)
@@ -665,30 +700,19 @@ async def setup_commands(bot: CountingBot):
                 record, settings.counting_mode, clan_tags
             )
             record.last_win_count = win_count
-            member = user
             thresholds = list(ctx.models.RoleThreshold.select())
-            record.last_role_id = await apply_roles(member, thresholds, win_count)
+            record.last_role_id = await apply_roles(user, thresholds, win_count)
+            record.last_username = getattr(user, "display_name", None)
             record.save()
             record_audit(
-                ctx.models, interaction.user.id, "recompute_user", {"user": user.id}
+                ctx.models, interaction.user.id, "sync_user", {"user": user.id}
             )
             await interaction.followup.send(
-                f"Recomputed {user.display_name}: {win_count} wins", ephemeral=True
+                f"Synced {user.display_name}: {win_count} wins", ephemeral=True
             )
-        else:
-            summary = await bot.run_sync(ctx, manual=True)
-            record_audit(ctx.models, interaction.user.id, "recompute_all", {})
-            await interaction.followup.send(summary, ephemeral=True)
-
-    @tree.command(name="sync", description="Trigger immediate sync")
-    async def sync(interaction: discord.Interaction):
-        admin_ctx = await require_admin(interaction)
-        if not admin_ctx:
             return
-        ctx, _member = admin_ctx
-        await interaction.response.defer(ephemeral=True, thinking=True)
         summary = await bot.run_sync(ctx, manual=True)
-        record_audit(ctx.models, interaction.user.id, "sync", {})
+        record_audit(ctx.models, interaction.user.id, "sync", {"scope": "all"})
         await interaction.followup.send(summary, ephemeral=True)
 
     @tree.command(name="set_mode", description="Set counting mode")
@@ -713,6 +737,17 @@ async def setup_commands(bot: CountingBot):
         record_audit(ctx.models, interaction.user.id, "set_mode", {"mode": mode})
         await interaction.response.send_message(
             f"Counting mode set to {mode}", ephemeral=True
+        )
+
+    @tree.command(name="get_mode", description="Show current counting mode")
+    async def get_mode(interaction: discord.Interaction):
+        admin_ctx = await require_admin(interaction)
+        if not admin_ctx:
+            return
+        ctx, _member = admin_ctx
+        settings = ctx.models.Settings.get_by_id(1)
+        await interaction.response.send_message(
+            f"Current counting mode: {settings.counting_mode}", ephemeral=True
         )
 
     @tree.command(name="set_interval", description="Set sync interval (minutes)")
@@ -805,8 +840,8 @@ async def setup_commands(bot: CountingBot):
             f"Removed {deleted} entries.", ephemeral=True
         )
 
-    @tree.command(name="roles_list", description="List role thresholds")
-    async def roles_list(interaction: discord.Interaction):
+    @tree.command(name="roles", description="List role thresholds")
+    async def roles(interaction: discord.Interaction):
         ctx = await resolve_context(interaction)
         if not ctx:
             return
@@ -864,8 +899,8 @@ async def setup_commands(bot: CountingBot):
             f"Removed {deleted} entries", ephemeral=True
         )
 
-    @tree.command(name="list_clans", description="List clan tags")
-    async def list_clans(interaction: discord.Interaction):
+    @tree.command(name="clans_list", description="List clan tags")
+    async def clans_list(interaction: discord.Interaction):
         ctx = await resolve_context(interaction)
         if not ctx:
             return

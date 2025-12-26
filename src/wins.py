@@ -62,13 +62,17 @@ async def compute_wins_sessions_with_clan(
     normalized_tags = [tag.upper() for tag in clan_tags]
     wins = 0
     for session in sessions:
-        if "clanTag" not in session:
+        game_type = session.get("gameType")
+        if str(game_type).upper() != "PUBLIC":
+            continue
+        raw_clan_tag = session.get("clanTag")
+        if raw_clan_tag is None or raw_clan_tag == "":
             match = re.search(
                 r"\[([A-Za-z0-9]+)\]", session.get("username", ""), re.IGNORECASE
             )
             clan_tag = match.group(1).upper() if match else ""
         else:
-            clan_tag = str(session.get("clanTag", "")).upper()
+            clan_tag = str(raw_clan_tag).upper()
         if clan_tag == "":
             continue
         if normalized_tags and clan_tag not in normalized_tags:

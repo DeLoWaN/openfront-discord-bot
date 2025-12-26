@@ -48,7 +48,7 @@ python -m src.bot
 - `/guild_remove` deletes a guild’s data and the bot leaves; re-invite to start fresh.
 
 ## After first launch
-- Add role thresholds with `/roles_add wins:<n> role:<select role>`, then inspect with `/roles_list`.
+- Add role thresholds with `/roles_add wins:<n> role:<select role>`, then inspect with `/roles`.
 - Set clan tags (for the default `sessions_with_clan` mode) via `/clan_tag_add TAG`, or switch counting mode with `/set_mode total|sessions_since_link|sessions_with_clan`.
 - Test linking and role assignment with `/link <player_id>` and `/sync` (admin) or wait for the next scheduled sync.
 - To wipe data and leave a guild, run `/guild_remove confirm:true` (admin only) and re-invite the bot later if needed.
@@ -71,10 +71,10 @@ The bot keeps one mode in the DB (change via `/set_mode`):
 | `/set_interval <minutes>` | Update sync interval (5–1440 minutes) | Yes |
 | `/roles_add wins:<n> role:<role>` | Insert/update a role threshold | Yes |
 | `/roles_remove [wins] [role]` | Delete thresholds by wins and/or role ID | Yes |
-| `/roles_list` | List configured thresholds | No |
+| `/roles` | List configured thresholds | No |
 | `/clan_tag_add <tag>` | Add a clan tag used for `sessions_with_clan` mode | Yes |
 | `/clan_tag_remove <tag>` | Remove a clan tag | Yes |
-| `/list_clans` | List stored clan tags | No |
+| `/clans_list` | List stored clan tags | No |
 | `/link_override <user> <player_id>` | Admin override to link a user | Yes |
 | `/audit [page]` | Show recent audit entries (20 per page) | Yes |
 | `/admin_role_add <role>` | Add an admin role for this guild | Yes |
@@ -83,7 +83,7 @@ The bot keeps one mode in the DB (change via `/set_mode`):
 | `/guild_remove confirm:true` | Delete this guild’s data from the bot | Yes |
 
 ## Roles and clans
-- Thresholds are not pre-seeded; set them with `/roles_add` and inspect with `/roles_list`.
+- Thresholds are not pre-seeded; set them with `/roles_add` and inspect with `/roles`.
 - Ensure the role IDs match roles in your guild and that the bot's role is above those roles so it can assign them.
 - Clan tags are stored in the DB and matched case-insensitively when using `sessions_with_clan` mode.
 
