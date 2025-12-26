@@ -4,7 +4,7 @@
 - Multi-guild Discord bot; tracks openfront.io player wins per guild and assigns Discord roles when thresholds are reached. Each guild is isolated in its own SQLite database.
 - Three selectable counting modes (stored in DB, switchable via admin command):
   1) `total`: use `/public/player/:playerId` to sum public ffa/teams wins (medium difficulty).
-  2) `sessions_since_link`: use `/public/player/:playerId/sessions`, counting wins where `gameEnd >= linked_at`.
+  2) `sessions_since_link`: use `/public/player/:playerId/sessions`, counting wins where `gameStart >= linked_at` (fall back to `gameEnd` if start time is missing).
   3) `sessions_with_clan` (default): use `/public/player/:playerId/sessions`, counting wins from PUBLIC games where the session `clanTag` (or a `[TAG]` prefix parsed from username when `clanTag` is empty) matches a stored clan tag. No time bound.
 - Supports multiple guilds in a single bot instance; each guild uses its own database for isolation.
 
@@ -50,7 +50,7 @@
 
 ## Win Calculation Logic
 - `total`: derive wins from `/public/player` public ffa/teams fields.
-- `sessions_since_link`: filter sessions with `gameEnd >= linked_at`; count wins flag.
+- `sessions_since_link`: filter sessions with `gameStart >= linked_at` (fall back to `gameEnd` if start is missing); count wins flag.
 - `sessions_with_clan`: include PUBLIC sessions whose `clanTag` matches a stored tag (uppercase). If `clanTag` is empty, parse `[TAG]` from username and match against stored tags. Skip sessions without a tag match; no time filter.
 - Last session username: choose most recent session by gameEnd for `/link` confirmation.
 

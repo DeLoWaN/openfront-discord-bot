@@ -14,6 +14,9 @@ class OpenFrontLike(Protocol):
     async def fetch_sessions(self, player_id: str) -> Iterable[dict[str, Any]]: ...
 
     @staticmethod
+    def session_start_time(session: dict[str, Any]) -> datetime | None: ...
+
+    @staticmethod
     def session_end_time(session: dict[str, Any]) -> datetime | None: ...
 
     @staticmethod
@@ -45,10 +48,13 @@ async def compute_wins_sessions_since_link(
     sessions = await client.fetch_sessions(player_id)
     wins = 0
     for session in sessions:
-        end_time = client.session_end_time(session)
-        if not end_time:
+        # Prefer gameStart; fall back to gameEnd if start is missing.
+        start_time = client.session_start_time(session)
+        if not start_time:
+            start_time = client.session_end_time(session)
+        if not start_time:
             continue
-        if end_time >= linked_at and client.session_win(session):
+        if start_time >= linked_at and client.session_win(session):
             wins += 1
     return wins
 

@@ -23,12 +23,12 @@ def test_compute_wins_total_sums_public_modes():
     assert wins == 10
 
 
-def test_compute_wins_since_link_filters_by_end_time():
+def test_compute_wins_since_link_filters_by_start_time():
     now = datetime.now(timezone.utc)
     linked_at = (now - timedelta(days=1)).replace(tzinfo=None)
     sessions = [
-        {"gameEnd": (now - timedelta(hours=2)).isoformat(), "hasWon": True},
-        {"gameEnd": (now - timedelta(days=2)).isoformat(), "hasWon": True},
+        {"gameStart": (linked_at + timedelta(hours=2)).isoformat(), "hasWon": True},
+        {"gameStart": (linked_at - timedelta(hours=2)).isoformat(), "hasWon": True},
     ]
     client = FakeOpenFront(sessions=sessions)
     wins = asyncio.run(compute_wins_sessions_since_link(client, "p1", linked_at))
@@ -85,13 +85,17 @@ def test_compute_wins_total_handles_missing_fields():
     assert wins == 0
 
 
-def test_compute_wins_sessions_since_link_skips_missing_end_time_or_losses():
+def test_compute_wins_sessions_since_link_skips_missing_start_or_losses():
     now = datetime.now(timezone.utc)
     linked_at = (now - timedelta(days=1)).replace(tzinfo=None)
     sessions = [
-        {"gameEnd": None, "hasWon": True},
-        {"gameEnd": (linked_at + timedelta(hours=1)).isoformat(), "hasWon": False},
-        {"gameEnd": (linked_at + timedelta(hours=2)).isoformat(), "hasWon": True},
+        {
+            "gameStart": None,
+            "gameEnd": (linked_at + timedelta(hours=1)).isoformat(),
+            "hasWon": True,
+        },  # uses fallback to end time
+        {"gameStart": (linked_at - timedelta(hours=2)).isoformat(), "hasWon": True},
+        {"gameStart": (linked_at + timedelta(hours=2)).isoformat(), "hasWon": False},
     ]
     client = FakeOpenFront(sessions=sessions)
     wins = asyncio.run(compute_wins_sessions_since_link(client, "p1", linked_at))

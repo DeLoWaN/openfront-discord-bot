@@ -29,6 +29,10 @@ class FakeOpenFront:
         return OpenFrontClient.session_end_time(session)
 
     @staticmethod
+    def session_start_time(session):
+        return OpenFrontClient.session_start_time(session)
+
+    @staticmethod
     def session_win(session):
         return OpenFrontClient.session_win(session)
 

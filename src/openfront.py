@@ -86,6 +86,10 @@ class OpenFrontClient:
         return sessions[0].get("username")
 
     @staticmethod
+    def session_start_time(session: Dict[str, Any]) -> Optional[datetime]:
+        return _parse_datetime(session.get("gameStart"))
+
+    @staticmethod
     def session_end_time(session: Dict[str, Any]) -> Optional[datetime]:
         return _parse_datetime(session.get("gameEnd"))
 

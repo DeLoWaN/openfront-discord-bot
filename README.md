@@ -57,8 +57,8 @@ python -m src.bot
 The bot uses one counting mode at a time (change it with `/set_mode`). Pick what fits your server:
 - `sessions_with_clan` (default): Counts wins from *Public* sessions with the clan tag matching a list of stored tag (uppercase).  
   Example: Stored tags = `ABC`, `XYZ`. Username `[XYZ]Player` or `Player[ABC]` counts as a win; a session with no tag or a different tag is ignored.
-- `sessions_since_link`: Counts wins from sessions that ended after the user linked their player ID.  
-  Example: User links at `2024-04-01 12:00 UTC`. A win on `2024-04-02` counts; an earlier win does not.
+- `sessions_since_link`: Counts wins from sessions that **started** after the user linked their player ID.
+  Example: User links at `2024-04-01 12:00 UTC`. A win from a session that started on `2024-04-02` counts; a session that started earlier does not.
 - `total`: Uses total public FFA + Team wins from the player profile.  
   Example: Profile shows `FFA Medium wins = 5` and `Team Medium wins = 7`; total wins = 12.
 

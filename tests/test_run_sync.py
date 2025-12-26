@@ -143,8 +143,8 @@ def test_run_sync_sessions_since_link(tmp_path):
     )
     bot.get_guild = cast(Any, lambda gid: guild if gid == ctx.guild_id else None)
     sessions = [
-        {"gameEnd": (linked_at + timedelta(hours=1)).isoformat(), "hasWon": True},
-        {"gameEnd": (linked_at - timedelta(hours=1)).isoformat(), "hasWon": True},
+        {"gameStart": (linked_at + timedelta(hours=1)).isoformat(), "hasWon": True},
+        {"gameStart": (linked_at - timedelta(hours=1)).isoformat(), "hasWon": True},
     ]
     bot.client = cast(Any, FakeOpenFront(sessions=sessions))
 
