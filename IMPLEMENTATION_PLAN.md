@@ -3,17 +3,16 @@
 ## Goal & Scope
 - Multi-guild Discord bot; tracks openfront.io player wins per guild and assigns Discord roles when thresholds are reached. Each guild is isolated in its own SQLite database.
 - Three selectable counting modes (stored in DB, switchable via admin command):
-  1) `total`: use `/public/player/:playerId` to sum public ffa/teams wins.
-  2) `sessions_since_link`: use `/public/player/:playerId/sessions`, counting wins where `endTime >= linked_at`.
+  1) `total`: use `/public/player/:playerId` to sum public ffa/teams wins (medium difficulty).
+  2) `sessions_since_link`: use `/public/player/:playerId/sessions`, counting wins where `gameEnd >= linked_at`.
   3) `sessions_with_clan` (default): use `/public/player/:playerId/sessions`, counting wins where username contains any stored clan tag (case-insensitive substring), no time bound.
 - Supports multiple guilds in a single bot instance; each guild uses its own database for isolation.
 
 ## OpenFront API Reference
 - Documentation: https://github.com/openfrontio/OpenFrontIO/blob/main/docs/API.md
-- Note: Example responses are obtained by querying the API; they are not embedded directly in the docs.
 - Endpoints used:
-  - `GET https://api.openfront.io/public/player/:playerId`: includes overall public stats; derive wins from public ffa/teams fields.
-  - `GET https://api.openfront.io/public/player/:playerId/sessions`: list of sessions with username, endTime, win flag, game info; handle pagination if present.
+  - `GET https://api.openfront.io/public/player/:playerId`: includes overall public stats; derive wins from public ffa/teams fields. Find a example in openfront-api-examples/player_info.json
+  - `GET https://api.openfront.io/public/player/:playerId/sessions`: list of sessions with username, gameEnd, win flag, game info; handle pagination if present. Find an example on openfront-api-examples/player_sessions.json
 - Only completed/public games are counted. No API key required. Implement exponential backoff with jitter on 429/5xx.
 
 ## Configuration
@@ -23,7 +22,7 @@
 ## Data Model (Peewee, SQLite)
 - `users(discord_user_id PK int64, player_id text, linked_at datetime UTC, last_win_count int default 0, last_role_id int64 nullable, created_at/updated_at)`.
 - `roles_thresholds(id PK, wins int, role_id int64, role_name text, created_at)`.
-- `clan_tags(id PK, tag_text text lowercased, created_at)`.
+- `clan_tags(id PK, tag_text text uppercased, created_at)`.
 - `settings(id PK fixed 1, counting_mode text enum ['total','sessions_since_link','sessions_with_clan'], sync_interval_minutes int, backoff_until datetime nullable, last_sync_at datetime nullable, created_at/updated_at)`; defaults: counting_mode=`sessions_with_clan`, sync_interval_minutes=60.
 - `audits(id PK, actor_discord_id int64, action text, payload json/text, created_at)`.
 
@@ -46,9 +45,9 @@
 
 ## Win Calculation Logic
 - `total`: derive wins from `/public/player` public ffa/teams fields.
-- `sessions_since_link`: filter sessions with `endTime >= linked_at`; count wins flag.
-- `sessions_with_clan`: include sessions whose username (lowercased) contains any stored clan tag (lowercased); no time filter.
-- Last session username: choose most recent session by endTime for `/link` confirmation.
+- `sessions_since_link`: filter sessions with `gameEnd >= linked_at`; count wins flag.
+- `sessions_with_clan`: include sessions whose username (uppercased) contains any stored clan tag (uppercased); no time filter.
+- Last session username: choose most recent session by gameEnd for `/link` confirmation.
 
 ## Role Assignment Logic
 - Load thresholds sorted asc; pick highest wins <= user win_count.
@@ -61,7 +60,7 @@
 - Per-user errors logged; do not abort run. Apply global backoff using `settings.backoff_until` on repeated OpenFront failures.
 
 ## Clan Matching Rules
-- Store tags lowercased; match if tag is substring of `session.username.lower()`.
+- Store tags uppercased; match if tag is substring of `session.username.lower()`.
 - No max tag limit.
 
 ## Startup/Bootstrap

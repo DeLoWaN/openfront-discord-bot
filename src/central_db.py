@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime
 from typing import List, Optional
 
@@ -30,7 +29,6 @@ class BaseModel(Model):
 class GuildEntry(BaseModel):
     guild_id = IntegerField(primary_key=True)
     database_path = CharField()
-    status = CharField(default="active")
 
 
 def init_central_db(path: str):
@@ -40,7 +38,7 @@ def init_central_db(path: str):
 
 
 def list_active_guilds() -> List[GuildEntry]:
-    return list(GuildEntry.select().where(GuildEntry.status == "active"))
+    return list(GuildEntry.select())
 
 
 def get_guild_entry(guild_id: int) -> Optional[GuildEntry]:
@@ -50,11 +48,10 @@ def get_guild_entry(guild_id: int) -> Optional[GuildEntry]:
 def register_guild(guild_id: int, database_path: str) -> GuildEntry:
     entry, _created = GuildEntry.get_or_create(
         guild_id=guild_id,
-        defaults={"database_path": database_path, "status": "active"},
+        defaults={"database_path": database_path},
     )
-    if entry.database_path != database_path or entry.status != "active":
+    if entry.database_path != database_path:
         entry.database_path = database_path
-        entry.status = "active"
         entry.save()
     return entry
 

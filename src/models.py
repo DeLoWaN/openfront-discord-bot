@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, List
+from typing import Iterable
 
 from peewee import (
     AutoField,
@@ -18,24 +18,6 @@ from peewee import (
 
 DEFAULT_COUNTING_MODE = "sessions_with_clan"
 DEFAULT_SYNC_INTERVAL = 60
-
-DEFAULT_THRESHOLDS: List[dict] = [
-    {
-        "wins": 2,
-        "role_id": 1453382920323731466,
-        "role_name": "UN Recruit | Basic | 2 wins",
-    },
-    {
-        "wins": 5,
-        "role_id": 1453488016390754336,
-        "role_name": "UN Trainee | Novice | 5 wins",
-    },
-    {
-        "wins": 50,
-        "role_id": 1453383116415701146,
-        "role_name": "UN Champion | Supreme Strategist | 50 wins",
-    },
-]
 
 
 @dataclass
@@ -126,16 +108,6 @@ def init_guild_db(path: str, guild_id: int) -> GuildModels:
             id=1,
             counting_mode=DEFAULT_COUNTING_MODE,
             sync_interval_minutes=DEFAULT_SYNC_INTERVAL,
-        )
-
-    existing_thresholds = {
-        rt.wins for rt in models.RoleThreshold.select(models.RoleThreshold.wins)
-    }
-    for entry in DEFAULT_THRESHOLDS:
-        if entry["wins"] in existing_thresholds:
-            continue
-        models.RoleThreshold.create(
-            wins=entry["wins"], role_id=entry["role_id"], role_name=entry["role_name"]
         )
 
     return models

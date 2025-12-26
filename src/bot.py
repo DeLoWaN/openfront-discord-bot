@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set
 
@@ -26,7 +26,7 @@ from .models import (
     seed_admin_roles,
     upsert_role_threshold,
 )
-from .openfront import OpenFrontClient
+from .openfront import OpenFrontClient, OpenFrontError
 from .wins import (
     compute_wins_sessions_since_link,
     compute_wins_sessions_with_clan,
@@ -218,6 +218,15 @@ class CountingBot(commands.Bot):
         models = init_guild_db(database_path, guild.id)
         seed_admin_roles(models, admin_role_ids_from_permissions(guild))
         admin_role_ids = self._load_admin_role_ids(models)
+        thresholds = list(models.RoleThreshold.select())
+        for threshold in thresholds:
+            if not guild.get_role(threshold.role_id):
+                LOGGER.warning(
+                    "Guild %s missing configured threshold role %s (wins=%s)",
+                    guild.id,
+                    threshold.role_id,
+                    threshold.wins,
+                )
         ctx = GuildContext(
             guild_id=guild.id,
             database_path=database_path,
@@ -245,8 +254,8 @@ class CountingBot(commands.Bot):
             await self._stop_sync_task(ctx)
             try:
                 ctx.models.db.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                LOGGER.warning("Failed to close DB for guild %s: %s", guild_id, exc)
             if db_path is None:
                 db_path = ctx.database_path
         elif db_path is None:
@@ -293,12 +302,29 @@ class CountingBot(commands.Bot):
                 return "Guild unavailable"
 
             settings = ctx.models.Settings.get_by_id(1)
+            if settings.backoff_until and settings.backoff_until > datetime.utcnow():
+                msg = f"In backoff until {settings.backoff_until.isoformat()}"
+                LOGGER.warning(
+                    "Skipping sync for guild %s: %s",
+                    ctx.guild_id,
+                    settings.backoff_until,
+                )
+                return msg
             thresholds = list(ctx.models.RoleThreshold.select())
             clan_tags = [ct.tag_text for ct in ctx.models.ClanTag.select()]
             users = list(ctx.models.User.select())
+            for threshold in thresholds:
+                if not guild.get_role(threshold.role_id):
+                    LOGGER.warning(
+                        "Guild %s missing configured threshold role %s (wins=%s)",
+                        guild.id,
+                        threshold.role_id,
+                        threshold.wins,
+                    )
 
             processed = 0
             failures = 0
+            openfront_failure = False
             for user in users:
                 member = guild.get_member(user.discord_user_id)
                 if not member:
@@ -308,6 +334,7 @@ class CountingBot(commands.Bot):
                         guild.id,
                     )
                     continue
+                previous_role_id = user.last_role_id
                 try:
                     win_count = await self._compute_wins(
                         user, settings.counting_mode, clan_tags
@@ -316,15 +343,41 @@ class CountingBot(commands.Bot):
                     target_role_id = await apply_roles(member, thresholds, win_count)
                     user.last_role_id = target_role_id
                     user.save()
+                    role_action = (
+                        "unchanged" if target_role_id == previous_role_id else "updated"
+                    )
+                    LOGGER.info(
+                        "Sync user guild=%s user=%s player=%s mode=%s wins=%s role=%s prev_role=%s action=%s",
+                        guild.id,
+                        user.discord_user_id,
+                        user.player_id,
+                        settings.counting_mode,
+                        win_count,
+                        target_role_id,
+                        previous_role_id,
+                        role_action,
+                    )
                     processed += 1
                 except Exception as exc:
                     failures += 1
+                    if isinstance(exc, OpenFrontError):
+                        openfront_failure = True
                     LOGGER.exception(
                         "Failed syncing user %s in guild %s: %s",
                         user.discord_user_id,
                         guild.id,
                         exc,
                     )
+            if openfront_failure:
+                backoff_target = datetime.utcnow() + timedelta(minutes=5)
+                settings.backoff_until = backoff_target
+                LOGGER.warning(
+                    "OpenFront errors detected; backing off guild %s until %s",
+                    guild.id,
+                    backoff_target,
+                )
+            else:
+                settings.backoff_until = None
             settings.last_sync_at = datetime.utcnow()
             settings.save()
             summary = f"Processed {processed} users, failures: {failures}"
@@ -433,6 +486,14 @@ async def setup_commands(bot: CountingBot):
                 )
             return
         LOGGER.exception("App command error: %s", error)
+        message = f"Command failed: {error}"
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(message, ephemeral=True)
+            else:
+                await interaction.response.send_message(message, ephemeral=True)
+        except Exception as exc:
+            LOGGER.warning("Failed sending error response for command: %s", exc)
 
     @tree.command(
         name="link", description="Link your Discord user to an OpenFront player ID"
@@ -441,6 +502,12 @@ async def setup_commands(bot: CountingBot):
         ctx = await resolve_context(interaction)
         if not ctx:
             return
+        LOGGER.info(
+            "Link request guild=%s user=%s player=%s",
+            ctx.guild_id,
+            interaction.user.id,
+            player_id,
+        )
         await interaction.response.defer(ephemeral=True, thinking=True)
         username = await last_session_username(bot.client, player_id)
         now = datetime.utcnow()
@@ -491,6 +558,9 @@ async def setup_commands(bot: CountingBot):
         ctx = await resolve_context(interaction)
         if not ctx:
             return
+        LOGGER.info(
+            "Unlink request guild=%s user=%s", ctx.guild_id, interaction.user.id
+        )
         ctx.models.User.delete().where(
             ctx.models.User.discord_user_id == interaction.user.id
         ).execute()
@@ -588,6 +658,12 @@ async def setup_commands(bot: CountingBot):
         settings = ctx.models.Settings.get_by_id(1)
         settings.counting_mode = mode
         settings.save()
+        LOGGER.info(
+            "Counting mode updated guild=%s actor=%s mode=%s",
+            ctx.guild_id,
+            interaction.user.id,
+            mode,
+        )
         record_audit(ctx.models, interaction.user.id, "set_mode", {"mode": mode})
         await interaction.response.send_message(
             f"Counting mode set to {mode}", ephemeral=True
@@ -603,6 +679,12 @@ async def setup_commands(bot: CountingBot):
         settings = ctx.models.Settings.get_by_id(1)
         settings.sync_interval_minutes = minutes
         settings.save()
+        LOGGER.info(
+            "Sync interval updated guild=%s actor=%s minutes=%s",
+            ctx.guild_id,
+            interaction.user.id,
+            minutes,
+        )
         record_audit(
             ctx.models, interaction.user.id, "set_interval", {"minutes": minutes}
         )
@@ -623,6 +705,13 @@ async def setup_commands(bot: CountingBot):
             return
         ctx, _member = admin_ctx
         upsert_role_threshold(ctx.models, wins, role.id, role_name)
+        LOGGER.info(
+            "Role threshold saved guild=%s actor=%s wins=%s role_id=%s",
+            ctx.guild_id,
+            interaction.user.id,
+            wins,
+            role.id,
+        )
         record_audit(
             ctx.models,
             interaction.user.id,
@@ -652,6 +741,14 @@ async def setup_commands(bot: CountingBot):
         if role is not None:
             query = query.where(ctx.models.RoleThreshold.role_id == role.id)
         deleted = query.execute()
+        LOGGER.info(
+            "Role threshold removal guild=%s actor=%s wins=%s role_id=%s deleted=%s",
+            ctx.guild_id,
+            interaction.user.id,
+            wins,
+            role.id if role else None,
+            deleted,
+        )
         record_audit(
             ctx.models,
             interaction.user.id,
@@ -683,6 +780,12 @@ async def setup_commands(bot: CountingBot):
         ctx, _member = admin_ctx
         tag_norm = tag.upper()
         ctx.models.ClanTag.insert(tag_text=tag_norm).on_conflict_ignore().execute()
+        LOGGER.info(
+            "Clan tag add guild=%s actor=%s tag=%s",
+            ctx.guild_id,
+            interaction.user.id,
+            tag_norm,
+        )
         record_audit(ctx.models, interaction.user.id, "clan_tag_add", {"tag": tag_norm})
         await interaction.response.send_message(
             f"Clan tag '{tag_norm}' added", ephemeral=True
@@ -698,6 +801,13 @@ async def setup_commands(bot: CountingBot):
         deleted = (
             ctx.models.ClanTag.delete().where(ctx.models.ClanTag.tag_text == tag_norm)
         ).execute()
+        LOGGER.info(
+            "Clan tag remove guild=%s actor=%s tag=%s deleted=%s",
+            ctx.guild_id,
+            interaction.user.id,
+            tag_norm,
+            deleted,
+        )
         record_audit(
             ctx.models, interaction.user.id, "clan_tag_remove", {"tag": tag_norm}
         )
@@ -730,6 +840,13 @@ async def setup_commands(bot: CountingBot):
             linked_at=now,
             last_win_count=0,
         ).on_conflict_replace().execute()
+        LOGGER.info(
+            "Link override guild=%s actor=%s target_user=%s player=%s",
+            ctx.guild_id,
+            interaction.user.id,
+            user.id,
+            player_id,
+        )
         record_audit(
             ctx.models,
             interaction.user.id,
@@ -769,6 +886,12 @@ async def setup_commands(bot: CountingBot):
         ctx, _member = admin_ctx
         ctx.models.GuildAdminRole.insert(role_id=role.id).on_conflict_ignore().execute()
         ctx.admin_role_ids = bot._load_admin_role_ids(ctx.models)
+        LOGGER.info(
+            "Admin role add guild=%s actor=%s role_id=%s",
+            ctx.guild_id,
+            interaction.user.id,
+            role.id,
+        )
         record_audit(
             ctx.models, interaction.user.id, "admin_role_add", {"role_id": role.id}
         )
@@ -790,6 +913,13 @@ async def setup_commands(bot: CountingBot):
             )
         ).execute()
         ctx.admin_role_ids = bot._load_admin_role_ids(ctx.models)
+        LOGGER.info(
+            "Admin role remove guild=%s actor=%s role_id=%s deleted=%s",
+            ctx.guild_id,
+            interaction.user.id,
+            role.id,
+            deleted,
+        )
         record_audit(
             ctx.models, interaction.user.id, "admin_role_remove", {"role_id": role.id}
         )
