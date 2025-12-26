@@ -154,8 +154,11 @@ def init_guild_db(path: str, guild_id: int) -> GuildModels:
 
 
 def record_audit(
-    models: GuildModels, actor_discord_id: int, action: str, payload: dict | None = None
-):
+    models: GuildModels,
+    actor_discord_id: int,
+    action: str,
+    payload: dict[str, object] | None = None,
+) -> None:
     models.Audit.create(
         actor_discord_id=actor_discord_id,
         action=action,

@@ -1,11 +1,14 @@
+from __future__ import annotations
+
 import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Set
+from typing import Any, Dict, Iterable, List, Optional, Protocol, Set, cast
 
 import discord
+import discord.abc
 from discord import app_commands
 from discord.ext import commands
 
@@ -40,6 +43,24 @@ logging.basicConfig(
 LOGGER = logging.getLogger(__name__)
 
 COUNTING_MODES = ["total", "sessions_since_link", "sessions_with_clan"]
+Threshold = Any
+
+
+class SupportsGuild(Protocol):
+    id: int
+
+    def get_role(self, role_id: int) -> Any | None: ...
+
+
+class SupportsMember(Protocol):
+    id: int
+    roles: Iterable[Any]
+    guild: SupportsGuild
+    display_name: str
+
+    async def add_roles(self, *roles: Any, **kwargs: Any) -> Any: ...
+
+    async def remove_roles(self, *roles: Any, **kwargs: Any) -> Any: ...
 
 
 @dataclass
@@ -50,14 +71,14 @@ class GuildContext:
     admin_role_ids: Set[int]
     sync_lock: asyncio.Lock
     sync_event: asyncio.Event
-    sync_task: Optional[asyncio.Task] = None
+    sync_task: asyncio.Task[None] | None = None
 
 
 async def determine_target_role(
-    guild: discord.Guild,
-    thresholds: List,
+    guild: SupportsGuild,
+    thresholds: Iterable[Threshold],
     win_count: int,
-) -> Optional[discord.Role]:
+) -> Any | None:
     target_id = None
     for threshold in sorted(thresholds, key=lambda t: t.wins):
         if threshold.wins <= win_count and threshold.role_id:
@@ -68,18 +89,18 @@ async def determine_target_role(
     return None
 
 
-def threshold_role_ids(thresholds: Iterable) -> List[int]:
+def threshold_role_ids(thresholds: Iterable[Threshold]) -> list[int]:
     return [t.role_id for t in thresholds if t.role_id]
 
 
 def user_label(
     user_id: int,
-    member: Optional[discord.Member] = None,
+    member: SupportsMember | discord.abc.User | None = None,
     models: GuildModels | None = None,
 ) -> str:
-    name: Optional[str] = None
+    name: str | None = None
     if member and getattr(member, "display_name", None):
-        name = member.display_name
+        name = getattr(member, "display_name")
     if not name and models:
         rec = models.User.get_or_none(models.User.discord_user_id == user_id)
         if rec and rec.last_username:
@@ -88,10 +109,10 @@ def user_label(
 
 
 async def apply_roles(
-    member: discord.Member,
-    thresholds: List,
+    member: Any,
+    thresholds: Iterable[Threshold],
     win_count: int,
-) -> Optional[int]:
+) -> int | None:
     guild = member.guild
     target_role = await determine_target_role(guild, thresholds, win_count)
     threshold_ids = set(threshold_role_ids(thresholds))
@@ -195,15 +216,15 @@ class CountingBot(commands.Bot):
         await self._delete_guild_data(guild.id)
 
     async def _bootstrap_guilds_on_ready(self):
-        active_entries = {entry.guild_id: entry for entry in list_active_guilds()}
+        active_entries: Dict[int, Any] = {}
+        for entry in list_active_guilds():
+            guild_key = int(cast(Any, entry.guild_id))
+            active_entries[guild_key] = entry
         for guild in self.guilds:
             try:
-                await self._ensure_guild_registered(
-                    guild,
-                    db_path=active_entries.get(guild.id).database_path
-                    if active_entries.get(guild.id)
-                    else None,
-                )
+                entry = active_entries.get(guild.id)
+                entry_path = str(entry.database_path) if entry else None
+                await self._ensure_guild_registered(guild, db_path=entry_path)
             except Exception as exc:
                 LOGGER.exception("Failed to initialize guild %s: %s", guild.id, exc)
 
@@ -213,7 +234,7 @@ class CountingBot(commands.Bot):
                     "Stale guild %s present in central DB but bot not in guild; deleting",
                     guild_id,
                 )
-                await self._delete_guild_data(guild_id, entry.database_path)
+                await self._delete_guild_data(int(guild_id), str(entry.database_path))
 
     def _load_admin_role_ids(self, models: GuildModels) -> Set[int]:
         return {row.role_id for row in models.GuildAdminRole.select()}
@@ -281,7 +302,7 @@ class CountingBot(commands.Bot):
         elif db_path is None:
             entry = get_guild_entry(guild_id)
             if entry:
-                db_path = entry.database_path
+                db_path = str(entry.database_path)
         if db_path:
             try:
                 Path(db_path).unlink(missing_ok=True)
@@ -487,7 +508,7 @@ async def setup_commands(bot: CountingBot):
             payload = str(data)
         guild = interaction.guild
         guild_label = f"{guild.name} ({guild.id})" if guild else "unknown-guild"
-        uid = getattr(interaction.user, "id", None)
+        uid = int(getattr(interaction.user, "id", 0) or 0)
         LOGGER.info(
             "Slash command %s by %s in %s with options %s",
             cmd.qualified_name if cmd else "unknown",

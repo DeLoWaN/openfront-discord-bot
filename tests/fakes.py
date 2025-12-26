@@ -20,6 +20,9 @@ class FakeOpenFront:
             raise OpenFrontError("simulated failure")
         return list(self.sessions)
 
+    async def last_session_username(self, player_id: str):
+        return None
+
     # Reuse parsing helpers from the real client
     @staticmethod
     def session_end_time(session):

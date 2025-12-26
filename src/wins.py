@@ -3,14 +3,29 @@ from __future__ import annotations
 import logging
 import re
 from datetime import datetime
-from typing import Iterable, Optional
+from typing import Any, Iterable, Optional, Protocol
 
 from .openfront import OpenFrontClient
+
+
+class OpenFrontLike(Protocol):
+    async def fetch_player(self, player_id: str) -> dict[str, Any]: ...
+
+    async def fetch_sessions(self, player_id: str) -> Iterable[dict[str, Any]]: ...
+
+    @staticmethod
+    def session_end_time(session: dict[str, Any]) -> datetime | None: ...
+
+    @staticmethod
+    def session_win(session: dict[str, Any]) -> bool: ...
+
+    async def last_session_username(self, player_id: str) -> Optional[str]: ...
+
 
 LOGGER = logging.getLogger(__name__)
 
 
-async def compute_wins_total(client: OpenFrontClient, player_id: str) -> int:
+async def compute_wins_total(client: OpenFrontLike, player_id: str) -> int:
     data = await client.fetch_player(player_id)
     public_stats = (
         data.get("stats", {}).get("Public", {}) if isinstance(data, dict) else {}
@@ -23,7 +38,7 @@ async def compute_wins_total(client: OpenFrontClient, player_id: str) -> int:
 
 
 async def compute_wins_sessions_since_link(
-    client: OpenFrontClient,
+    client: OpenFrontLike,
     player_id: str,
     linked_at: datetime,
 ) -> int:
@@ -39,11 +54,11 @@ async def compute_wins_sessions_since_link(
 
 
 async def compute_wins_sessions_with_clan(
-    client: OpenFrontClient,
+    client: OpenFrontLike,
     player_id: str,
     clan_tags: Iterable[str],
 ) -> int:
-    sessions = await client.fetch_sessions(player_id)
+    sessions = list(await client.fetch_sessions(player_id))
     normalized_tags = [tag.upper() for tag in clan_tags]
     wins = 0
     for session in sessions:
@@ -70,7 +85,5 @@ async def compute_wins_sessions_with_clan(
     return wins
 
 
-async def last_session_username(
-    client: OpenFrontClient, player_id: str
-) -> Optional[str]:
+async def last_session_username(client: OpenFrontLike, player_id: str) -> Optional[str]:
     return await client.last_session_username(player_id)

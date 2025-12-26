@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
+from typing import Any, cast
 
 from src.bot import BotConfig, CountingBot, GuildContext
 from src.models import init_guild_db
@@ -63,16 +64,19 @@ def test_run_sync_assigns_role_in_total_mode(tmp_path):
     guild, member = fake_guild_with_member(
         ctx.guild_id, 42, [FakeRole(1, "Bronze"), FakeRole(2, "Silver")]
     )
-    bot.get_guild = lambda gid: guild if gid == ctx.guild_id else None
-    bot.client = FakeOpenFront(
-        player_data={
-            "stats": {
-                "Public": {
-                    "Free For All": {"Medium": {"wins": 4}},
-                    "Team": {"Medium": {"wins": 8}},
+    bot.get_guild = cast(Any, lambda gid: guild if gid == ctx.guild_id else None)
+    bot.client = cast(
+        Any,
+        FakeOpenFront(
+            player_data={
+                "stats": {
+                    "Public": {
+                        "Free For All": {"Medium": {"wins": 4}},
+                        "Team": {"Medium": {"wins": 8}},
+                    }
                 }
-            }
-        }
+            },
+        ),
     )
 
     bot.guild_contexts[ctx.guild_id] = ctx
@@ -105,12 +109,12 @@ def test_run_sync_sessions_with_clan(tmp_path):
     guild, member = fake_guild_with_member(
         ctx.guild_id, 99, [FakeRole(5, "ClanWinner")]
     )
-    bot.get_guild = lambda gid: guild if gid == ctx.guild_id else None
+    bot.get_guild = cast(Any, lambda gid: guild if gid == ctx.guild_id else None)
     sessions = [
         {"username": "[ABC]Player", "hasWon": True},
         {"username": "[XYZ]Other", "hasWon": True},
     ]
-    bot.client = FakeOpenFront(sessions=sessions)
+    bot.client = cast(Any, FakeOpenFront(sessions=sessions))
 
     bot.guild_contexts[ctx.guild_id] = ctx
     asyncio.run(bot.run_sync(ctx, manual=True))
@@ -137,12 +141,12 @@ def test_run_sync_sessions_since_link(tmp_path):
     guild, member = fake_guild_with_member(
         ctx.guild_id, 77, [FakeRole(7, "RecentWinner")]
     )
-    bot.get_guild = lambda gid: guild if gid == ctx.guild_id else None
+    bot.get_guild = cast(Any, lambda gid: guild if gid == ctx.guild_id else None)
     sessions = [
         {"gameEnd": (linked_at + timedelta(hours=1)).isoformat(), "hasWon": True},
         {"gameEnd": (linked_at - timedelta(hours=1)).isoformat(), "hasWon": True},
     ]
-    bot.client = FakeOpenFront(sessions=sessions)
+    bot.client = cast(Any, FakeOpenFront(sessions=sessions))
 
     bot.guild_contexts[ctx.guild_id] = ctx
     asyncio.run(bot.run_sync(ctx, manual=True))
@@ -166,8 +170,8 @@ def test_run_sync_sets_backoff_on_openfront_errors(tmp_path):
     models.RoleThreshold.create(wins=1, role_id=9)
 
     guild, member = fake_guild_with_member(ctx.guild_id, 11, [FakeRole(9, "Any")])
-    bot.get_guild = lambda gid: guild if gid == ctx.guild_id else None
-    bot.client = FakeOpenFront(should_fail=True)
+    bot.get_guild = cast(Any, lambda gid: guild if gid == ctx.guild_id else None)
+    bot.client = cast(Any, FakeOpenFront(should_fail=True))
 
     bot.guild_contexts[ctx.guild_id] = ctx
     summary = asyncio.run(bot.run_sync(ctx, manual=True))

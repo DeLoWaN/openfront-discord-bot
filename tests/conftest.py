@@ -1,3 +1,5 @@
+# pyright: reportGeneralTypeIssues=false
+
 import asyncio
 import importlib.util
 import sys
