@@ -323,6 +323,13 @@ def _install_peewee_stub():
         def init(self, path):
             self.path = path
 
+        def execute_sql(self, *args, **kwargs):
+            class DummyCursor:
+                def fetchall(self_inner):
+                    return []
+
+            return DummyCursor()
+
     peewee.AutoField = AutoField
     peewee.CharField = CharField
     peewee.DateTimeField = DateTimeField

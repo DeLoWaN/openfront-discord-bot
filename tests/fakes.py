@@ -42,6 +42,7 @@ class FakeMember:
     id: int
     roles: List[FakeRole]
     guild: "FakeGuild"
+    display_name: str = ""
     added_roles: List[int] = field(default_factory=list)
     removed_roles: List[int] = field(default_factory=list)
 

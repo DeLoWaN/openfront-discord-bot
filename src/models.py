@@ -54,12 +54,12 @@ def _create_guild_models(db: SqliteDatabase) -> GuildModels:
         linked_at = DateTimeField()
         last_win_count = IntegerField(default=0)
         last_role_id = IntegerField(null=True)
+        last_username = CharField(null=True)
 
     class RoleThreshold(BaseModel):
         id = AutoField()
         wins = IntegerField(unique=True)
         role_id = IntegerField(unique=True)
-        role_name = CharField()
 
     class ClanTag(BaseModel):
         id = AutoField()
@@ -108,6 +108,41 @@ def init_guild_db(path: str, guild_id: int) -> GuildModels:
         ]
     )
 
+    # Ensure new columns are present for older DBs.
+    try:
+        cols = db.execute_sql(
+            f"PRAGMA table_info({models.User._meta.table_name});"
+        ).fetchall()
+        col_names = {row[1] for row in cols}
+        if "last_username" not in col_names:
+            db.execute_sql(
+                f"ALTER TABLE {models.User._meta.table_name} ADD COLUMN last_username TEXT"
+            )
+        # Remove legacy role_name column by recreating the table without it if present.
+        rt_table = models.RoleThreshold._meta.table_name
+        rt_cols = db.execute_sql(f"PRAGMA table_info({rt_table});").fetchall()
+        if any(row[1] == "role_name" for row in rt_cols):
+            db.execute_sql(
+                f"""
+                BEGIN;
+                CREATE TABLE {rt_table}_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    wins INTEGER NOT NULL UNIQUE,
+                    role_id INTEGER NOT NULL UNIQUE,
+                    created_at DATETIME NOT NULL,
+                    updated_at DATETIME NOT NULL
+                );
+                INSERT INTO {rt_table}_new (id, wins, role_id, created_at, updated_at)
+                    SELECT id, wins, role_id, created_at, updated_at FROM {rt_table};
+                DROP TABLE {rt_table};
+                ALTER TABLE {rt_table}_new RENAME TO {rt_table};
+                COMMIT;
+                """
+            )
+    except Exception:
+        # If PRAGMA/ALTER not supported (e.g., stub), ignore.
+        pass
+
     if models.Settings.select().where(models.Settings.id == 1).count() == 0:
         models.Settings.create(
             id=1,
@@ -128,14 +163,11 @@ def record_audit(
     )
 
 
-def upsert_role_threshold(models: GuildModels, wins: int, role_id: int, role_name: str):
-    models.RoleThreshold.insert(
-        wins=wins, role_id=role_id, role_name=role_name
-    ).on_conflict(
+def upsert_role_threshold(models: GuildModels, wins: int, role_id: int):
+    models.RoleThreshold.insert(wins=wins, role_id=role_id).on_conflict(
         conflict_target=[models.RoleThreshold.wins],
         update={
             models.RoleThreshold.role_id: role_id,
-            models.RoleThreshold.role_name: role_name,
         },
     ).execute()
 

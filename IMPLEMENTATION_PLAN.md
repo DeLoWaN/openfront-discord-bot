@@ -34,9 +34,9 @@
 - `/sync`: admin-only; trigger immediate sync; audit.
 - `/set_mode mode`: admin-only; update settings.counting_mode; audit.
 - `/set_interval minutes`: admin-only; update settings.sync_interval_minutes (clamped bounds); audit.
-- `/add_role wins role_id role_name`: admin-only; insert/update threshold; audit.
-- `/remove_role wins|role_id`: admin-only; delete threshold; audit.
-- `/list_roles`: list thresholds ordered asc.
+- `/roles_add wins role_id role_name`: admin-only; insert/update threshold; audit.
+- `/roles_remove wins|role_id`: admin-only; delete threshold; audit.
+- `/roles_list`: list thresholds ordered asc.
 - `/set_clan tag`: admin-only; add case-insensitive tag; audit.
 - `/remove_clan tag`: admin-only; remove tag; audit.
 - `/list_clans`: list tags.

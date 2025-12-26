@@ -49,8 +49,8 @@ def test_run_sync_assigns_role_in_total_mode(tmp_path):
     models = ctx.models
 
     # Thresholds and user
-    models.RoleThreshold.create(wins=5, role_id=1, role_name="Bronze")
-    models.RoleThreshold.create(wins=10, role_id=2, role_name="Silver")
+    models.RoleThreshold.create(wins=5, role_id=1)
+    models.RoleThreshold.create(wins=10, role_id=2)
     models.User.create(
         discord_user_id=42,
         player_id="p1",
@@ -91,7 +91,7 @@ def test_run_sync_sessions_with_clan(tmp_path):
     ctx = make_context(tmp_path)
     models = ctx.models
 
-    models.RoleThreshold.create(wins=1, role_id=5, role_name="ClanWinner")
+    models.RoleThreshold.create(wins=1, role_id=5)
     models.User.create(
         discord_user_id=99,
         player_id="p2",
@@ -127,7 +127,7 @@ def test_run_sync_sessions_since_link(tmp_path):
     ctx = make_context(tmp_path)
     models = ctx.models
 
-    models.RoleThreshold.create(wins=1, role_id=7, role_name="RecentWinner")
+    models.RoleThreshold.create(wins=1, role_id=7)
     linked_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=1)
     models.User.create(discord_user_id=77, player_id="p3", linked_at=linked_at)
     settings = models.Settings.get_by_id(1)
@@ -163,7 +163,7 @@ def test_run_sync_sets_backoff_on_openfront_errors(tmp_path):
         player_id="p4",
         linked_at=datetime.now(timezone.utc).replace(tzinfo=None),
     )
-    models.RoleThreshold.create(wins=1, role_id=9, role_name="Any")
+    models.RoleThreshold.create(wins=1, role_id=9)
 
     guild, member = fake_guild_with_member(ctx.guild_id, 11, [FakeRole(9, "Any")])
     bot.get_guild = lambda gid: guild if gid == ctx.guild_id else None

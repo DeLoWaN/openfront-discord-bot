@@ -74,6 +74,21 @@ def threshold_role_ids(thresholds: Iterable) -> List[int]:
     return [t.role_id for t in thresholds if t.role_id]
 
 
+def user_label(
+    user_id: int,
+    member: Optional[discord.Member] = None,
+    models: GuildModels | None = None,
+) -> str:
+    name: Optional[str] = None
+    if member and getattr(member, "display_name", None):
+        name = member.display_name
+    if not name and models:
+        rec = models.User.get_or_none(models.User.discord_user_id == user_id)
+        if rec and rec.last_username:
+            name = rec.last_username
+    return f"{name} ({user_id})" if name else str(user_id)
+
+
 async def apply_roles(
     member: discord.Member,
     thresholds: List,
@@ -101,7 +116,9 @@ async def apply_roles(
         try:
             await member.remove_roles(*to_remove, reason="Updating win tier role")
         except Exception as exc:
-            LOGGER.warning("Failed removing roles for %s: %s", member.id, exc)
+            LOGGER.warning(
+                "Failed removing roles for %s: %s", user_label(member.id, member), exc
+            )
     if target_role and target_role not in member.roles:
         try:
             await member.add_roles(target_role, reason="Updating win tier role")
@@ -109,10 +126,12 @@ async def apply_roles(
                 "Assigned role %s (%s) to user %s",
                 target_role.name,
                 target_role.id,
-                member.id,
+                user_label(member.id, member),
             )
         except Exception as exc:
-            LOGGER.warning("Failed adding role for %s: %s", member.id, exc)
+            LOGGER.warning(
+                "Failed adding role for %s: %s", user_label(member.id, member), exc
+            )
     if not target_role and threshold_ids:
         # Remove stale roles if user falls below minimum
         try:
@@ -121,7 +140,9 @@ async def apply_roles(
                 reason="Clearing tier roles",
             )
         except Exception as exc:
-            LOGGER.warning("Failed clearing roles for %s: %s", member.id, exc)
+            LOGGER.warning(
+                "Failed clearing roles for %s: %s", user_label(member.id, member), exc
+            )
     return target_role_id
 
 
@@ -332,7 +353,7 @@ class CountingBot(commands.Bot):
                 if not member:
                     LOGGER.info(
                         "User %s not in guild %s, skipping",
-                        user.discord_user_id,
+                        user_label(user.discord_user_id, models=ctx.models),
                         guild.id,
                     )
                     continue
@@ -344,6 +365,7 @@ class CountingBot(commands.Bot):
                     user.last_win_count = win_count
                     target_role_id = await apply_roles(member, thresholds, win_count)
                     user.last_role_id = target_role_id
+                    user.last_username = getattr(member, "display_name", None)
                     user.save()
                     role_action = (
                         "unchanged" if target_role_id == previous_role_id else "updated"
@@ -351,7 +373,7 @@ class CountingBot(commands.Bot):
                     LOGGER.info(
                         "Sync user guild=%s user=%s player=%s mode=%s wins=%s role=%s prev_role=%s action=%s",
                         guild.id,
-                        user.discord_user_id,
+                        user_label(user.discord_user_id, member, ctx.models),
                         user.player_id,
                         settings.counting_mode,
                         win_count,
@@ -366,7 +388,7 @@ class CountingBot(commands.Bot):
                         openfront_failure = True
                     LOGGER.exception(
                         "Failed syncing user %s in guild %s: %s",
-                        user.discord_user_id,
+                        user_label(user.discord_user_id, member, ctx.models),
                         guild.id,
                         exc,
                     )
@@ -467,11 +489,11 @@ async def setup_commands(bot: CountingBot):
             payload = str(data)
         guild = interaction.guild
         guild_label = f"{guild.name} ({guild.id})" if guild else "unknown-guild"
+        uid = getattr(interaction.user, "id", None)
         LOGGER.info(
-            "Slash command %s by %s (%s) in %s with options %s",
+            "Slash command %s by %s in %s with options %s",
             cmd.qualified_name if cmd else "unknown",
-            interaction.user,
-            getattr(interaction.user, "id", "unknown"),
+            user_label(uid, interaction.user),
             guild_label,
             payload,
         )
@@ -507,7 +529,7 @@ async def setup_commands(bot: CountingBot):
         LOGGER.info(
             "Link request guild=%s user=%s player=%s",
             ctx.guild_id,
-            interaction.user.id,
+            user_label(interaction.user.id, interaction.user, ctx.models),
             player_id,
         )
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -518,6 +540,7 @@ async def setup_commands(bot: CountingBot):
             player_id=player_id,
             linked_at=now,
             last_win_count=0,
+            last_username=getattr(interaction.user, "display_name", None),
         ).on_conflict_replace().execute()
         win_count = None
         try:
@@ -561,7 +584,9 @@ async def setup_commands(bot: CountingBot):
         if not ctx:
             return
         LOGGER.info(
-            "Unlink request guild=%s user=%s", ctx.guild_id, interaction.user.id
+            "Unlink request guild=%s user=%s",
+            ctx.guild_id,
+            user_label(interaction.user.id, interaction.user, ctx.models),
         )
         ctx.models.User.delete().where(
             ctx.models.User.discord_user_id == interaction.user.id
@@ -663,7 +688,7 @@ async def setup_commands(bot: CountingBot):
         LOGGER.info(
             "Counting mode updated guild=%s actor=%s mode=%s",
             ctx.guild_id,
-            interaction.user.id,
+            user_label(interaction.user.id, interaction.user, ctx.models),
             mode,
         )
         record_audit(ctx.models, interaction.user.id, "set_mode", {"mode": mode})
@@ -684,7 +709,7 @@ async def setup_commands(bot: CountingBot):
         LOGGER.info(
             "Sync interval updated guild=%s actor=%s minutes=%s",
             ctx.guild_id,
-            interaction.user.id,
+            user_label(interaction.user.id, interaction.user, ctx.models),
             minutes,
         )
         record_audit(
@@ -695,35 +720,34 @@ async def setup_commands(bot: CountingBot):
             f"Sync interval set to {minutes} minutes", ephemeral=True
         )
 
-    @tree.command(name="add_role", description="Add or update a threshold role")
-    async def add_role(
+    @tree.command(name="roles_add", description="Add or update a threshold role")
+    async def roles_add(
         interaction: discord.Interaction,
         wins: int,
         role: discord.Role,
-        role_name: str,
     ):
         admin_ctx = await require_admin(interaction)
         if not admin_ctx:
             return
         ctx, _member = admin_ctx
-        upsert_role_threshold(ctx.models, wins, role.id, role_name)
+        upsert_role_threshold(ctx.models, wins, role.id)
         LOGGER.info(
             "Role threshold saved guild=%s actor=%s wins=%s role_id=%s",
             ctx.guild_id,
-            interaction.user.id,
+            user_label(interaction.user.id, interaction.user, ctx.models),
             wins,
             role.id,
         )
         record_audit(
             ctx.models,
             interaction.user.id,
-            "add_role",
+            "roles_add",
             {"wins": wins, "role_id": role.id},
         )
         await interaction.response.send_message("Role threshold saved.", ephemeral=True)
 
-    @tree.command(name="remove_role", description="Remove a threshold role")
-    async def remove_role(
+    @tree.command(name="roles_remove", description="Remove a threshold role")
+    async def roles_remove(
         interaction: discord.Interaction,
         wins: Optional[int] = None,
         role: Optional[discord.Role] = None,
@@ -737,6 +761,7 @@ async def setup_commands(bot: CountingBot):
                 "Provide wins or role.", ephemeral=True
             )
             return
+        actor_label = user_label(interaction.user.id, interaction.user, ctx.models)
         query = ctx.models.RoleThreshold.delete()
         if wins is not None:
             query = query.where(ctx.models.RoleThreshold.wins == wins)
@@ -746,7 +771,7 @@ async def setup_commands(bot: CountingBot):
         LOGGER.info(
             "Role threshold removal guild=%s actor=%s wins=%s role_id=%s deleted=%s",
             ctx.guild_id,
-            interaction.user.id,
+            actor_label,
             wins,
             role.id if role else None,
             deleted,
@@ -754,22 +779,24 @@ async def setup_commands(bot: CountingBot):
         record_audit(
             ctx.models,
             interaction.user.id,
-            "remove_role",
+            "roles_remove",
             {"wins": wins, "role": role.id if role else None},
         )
         await interaction.response.send_message(
             f"Removed {deleted} entries.", ephemeral=True
         )
 
-    @tree.command(name="list_roles", description="List role thresholds")
-    async def list_roles(interaction: discord.Interaction):
+    @tree.command(name="roles_list", description="List role thresholds")
+    async def roles_list(interaction: discord.Interaction):
         ctx = await resolve_context(interaction)
         if not ctx:
             return
+        guild = interaction.guild
         rows = ctx.models.RoleThreshold.select().order_by(ctx.models.RoleThreshold.wins)
-        lines = [
-            f"{row.wins}: {row.role_name} (role id: {row.role_id})" for row in rows
-        ]
+        lines = []
+        for row in rows:
+            mention = f"<@&{row.role_id}>"
+            lines.append(f"{row.wins} wins: {mention}")
         await interaction.response.send_message(
             "\n".join(lines) or "No roles configured", ephemeral=True
         )
@@ -780,12 +807,13 @@ async def setup_commands(bot: CountingBot):
         if not admin_ctx:
             return
         ctx, _member = admin_ctx
+        actor_label = user_label(interaction.user.id, interaction.user, ctx.models)
         tag_norm = tag.upper()
         ctx.models.ClanTag.insert(tag_text=tag_norm).on_conflict_ignore().execute()
         LOGGER.info(
             "Clan tag add guild=%s actor=%s tag=%s",
             ctx.guild_id,
-            interaction.user.id,
+            actor_label,
             tag_norm,
         )
         record_audit(ctx.models, interaction.user.id, "clan_tag_add", {"tag": tag_norm})
@@ -799,6 +827,7 @@ async def setup_commands(bot: CountingBot):
         if not admin_ctx:
             return
         ctx, _member = admin_ctx
+        actor_label = user_label(interaction.user.id, interaction.user, ctx.models)
         tag_norm = tag.upper()
         deleted = (
             ctx.models.ClanTag.delete().where(ctx.models.ClanTag.tag_text == tag_norm)
@@ -806,7 +835,7 @@ async def setup_commands(bot: CountingBot):
         LOGGER.info(
             "Clan tag remove guild=%s actor=%s tag=%s deleted=%s",
             ctx.guild_id,
-            interaction.user.id,
+            actor_label,
             tag_norm,
             deleted,
         )
@@ -841,6 +870,7 @@ async def setup_commands(bot: CountingBot):
             player_id=player_id,
             linked_at=now,
             last_win_count=0,
+            last_username=getattr(user, "display_name", None),
         ).on_conflict_replace().execute()
         LOGGER.info(
             "Link override guild=%s actor=%s target_user=%s player=%s",
@@ -872,8 +902,11 @@ async def setup_commands(bot: CountingBot):
             .order_by(ctx.models.Audit.id.desc())
             .paginate(page, limit)
         )
+        guild = interaction.guild
+        member_lookup = guild.get_member if guild else None
+
         lines = [
-            f"{row.id}: actor={row.actor_discord_id} action={row.action} payload={row.payload}"
+            f"{row.id}: actor={user_label(row.actor_discord_id, member_lookup(row.actor_discord_id) if member_lookup else None, ctx.models)} action={row.action} payload={row.payload}"
             for row in query
         ]
         await interaction.response.send_message(
@@ -886,12 +919,13 @@ async def setup_commands(bot: CountingBot):
         if not admin_ctx:
             return
         ctx, _member = admin_ctx
+        actor_label = user_label(interaction.user.id, interaction.user, ctx.models)
         ctx.models.GuildAdminRole.insert(role_id=role.id).on_conflict_ignore().execute()
         ctx.admin_role_ids = bot._load_admin_role_ids(ctx.models)
         LOGGER.info(
             "Admin role add guild=%s actor=%s role_id=%s",
             ctx.guild_id,
-            interaction.user.id,
+            actor_label,
             role.id,
         )
         record_audit(
@@ -909,6 +943,7 @@ async def setup_commands(bot: CountingBot):
         if not admin_ctx:
             return
         ctx, _member = admin_ctx
+        actor_label = user_label(interaction.user.id, interaction.user, ctx.models)
         deleted = (
             ctx.models.GuildAdminRole.delete().where(
                 ctx.models.GuildAdminRole.role_id == role.id
@@ -918,7 +953,7 @@ async def setup_commands(bot: CountingBot):
         LOGGER.info(
             "Admin role remove guild=%s actor=%s role_id=%s deleted=%s",
             ctx.guild_id,
-            interaction.user.id,
+            actor_label,
             role.id,
             deleted,
         )
