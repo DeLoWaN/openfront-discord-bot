@@ -1,7 +1,17 @@
-discord.py==2.3.2
-aiohttp==3.9.5
-peewee==3.17.3
-PyYAML==6.0.1
-python-dotenv==1.0.1
-pytest==8.3.3
-pytest-asyncio==0.23.8
+-i https://pypi.org/simple
+aiohappyeyeballs==2.6.1; python_version >= '3.9'
+aiohttp==3.13.2; python_version >= '3.9'
+aiosignal==1.4.0; python_version >= '3.9'
+async-timeout==5.0.1; python_version >= '3.8'
+attrs==25.4.0; python_version >= '3.9'
+discord==2.3.2
+discord.py==2.6.4; python_version >= '3.8'
+frozenlist==1.8.0; python_version >= '3.9'
+idna==3.11; python_version >= '3.8'
+multidict==6.7.0; python_version >= '3.9'
+peewee==3.18.3
+propcache==0.4.1; python_version >= '3.9'
+python-dotenv==1.2.1; python_version >= '3.9'
+pyyaml==6.0.3; python_version >= '3.8'
+typing-extensions==4.15.0; python_version >= '3.9'
+yarl==1.22.0; python_version >= '3.9'

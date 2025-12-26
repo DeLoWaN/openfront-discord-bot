@@ -16,8 +16,8 @@ Discord bot that works across multiple guilds. It links members to their OpenFro
 ## Setup
 1. Clone and create a virtualenv:
    ```bash
-   git clone https://github.com/<your-org>/counting-bot.git
-   cd counting-bot
+   git clone https://github.com/DeLoWaN/openfront-roles-discord-bot
+   cd openfront-roles-discord-bot
    python -m venv .venv
    source .venv/bin/activate
    pip install -r requirements.txt
@@ -50,12 +50,12 @@ python -m src.bot
 ## After first launch
 - Add role thresholds with `/roles_add wins:<n> role:<select role>`, then inspect with `/roles`.
 - Set clan tags (for the default `sessions_with_clan` mode) via `/clan_tag_add TAG`, or switch counting mode with `/set_mode total|sessions_since_link|sessions_with_clan`.
-- Test linking and role assignment with `/link <player_id>` and `/sync` (admin) or wait for the next scheduled sync.
+- Test linking and role assignment with `/link <player_id>` and `/sync` (admin; optionally target one user) or wait for the next scheduled sync.
 - To wipe data and leave a guild, run `/guild_remove confirm:true` (admin only) and re-invite the bot later if needed.
 
 ## Counting modes
 The bot keeps one mode in the DB (change via `/set_mode`):
-- `sessions_with_clan` (default): counts wins from sessions whose clan tag matches any stored tag.
+- `sessions_with_clan` (default): counts wins from PUBLIC sessions whose `clanTag` matches a stored tag (uppercase). If `clanTag` is empty, it parses `[TAG]` from the username and matches against stored tags.
 - `sessions_since_link`: counts wins from sessions that ended after the user linked.
 - `total`: sums total public FFA + Team wins from the player profile.
 
@@ -65,9 +65,9 @@ The bot keeps one mode in the DB (change via `/set_mode`):
 | `/link <player_id>` | Link your Discord account to an OpenFront player ID; fetches last session username | No |
 | `/unlink` | Remove your link | No |
 | `/status [user]` | Show link details and last sync info (target another user if admin) | No (admin to inspect others) |
-| `/recompute [user]` | Recompute wins and roles for one user or all linked users | Yes |
-| `/sync` | Trigger immediate sync loop | Yes |
+| `/sync [user]` | Trigger immediate sync for all or a specific user | Yes |
 | `/set_mode <mode>` | Set counting mode (`total`, `sessions_since_link`, `sessions_with_clan`) | Yes |
+| `/get_mode` | Show current counting mode | Yes |
 | `/set_interval <minutes>` | Update sync interval (5–1440 minutes) | Yes |
 | `/roles_add wins:<n> role:<role>` | Insert/update a role threshold | Yes |
 | `/roles_remove [wins] [role]` | Delete thresholds by wins and/or role ID | Yes |
@@ -85,7 +85,7 @@ The bot keeps one mode in the DB (change via `/set_mode`):
 ## Roles and clans
 - Thresholds are not pre-seeded; set them with `/roles_add` and inspect with `/roles`.
 - Ensure the role IDs match roles in your guild and that the bot's role is above those roles so it can assign them.
-- Clan tags are stored in the DB and matched case-insensitively when using `sessions_with_clan` mode.
+- Clan tags are stored in the DB (uppercased) and matched against session `clanTag` or a `[TAG]` parsed from username for PUBLIC games when using `sessions_with_clan` mode.
 
 ## Data storage and logging
 - Central registry at `central_database_path` tracks guild IDs and DB paths.
