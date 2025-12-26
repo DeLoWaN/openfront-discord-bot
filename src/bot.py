@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set
 
@@ -25,6 +25,7 @@ from .models import (
     record_audit,
     seed_admin_roles,
     upsert_role_threshold,
+    utcnow_naive,
 )
 from .openfront import OpenFrontClient, OpenFrontError
 from .wins import (
@@ -302,7 +303,8 @@ class CountingBot(commands.Bot):
                 return "Guild unavailable"
 
             settings = ctx.models.Settings.get_by_id(1)
-            if settings.backoff_until and settings.backoff_until > datetime.utcnow():
+            now = utcnow_naive()
+            if settings.backoff_until and settings.backoff_until > now:
                 msg = f"In backoff until {settings.backoff_until.isoformat()}"
                 LOGGER.warning(
                     "Skipping sync for guild %s: %s",
@@ -369,7 +371,7 @@ class CountingBot(commands.Bot):
                         exc,
                     )
             if openfront_failure:
-                backoff_target = datetime.utcnow() + timedelta(minutes=5)
+                backoff_target = utcnow_naive() + timedelta(minutes=5)
                 settings.backoff_until = backoff_target
                 LOGGER.warning(
                     "OpenFront errors detected; backing off guild %s until %s",
@@ -378,7 +380,7 @@ class CountingBot(commands.Bot):
                 )
             else:
                 settings.backoff_until = None
-            settings.last_sync_at = datetime.utcnow()
+            settings.last_sync_at = utcnow_naive()
             settings.save()
             summary = f"Processed {processed} users, failures: {failures}"
             guild_label = f"{guild.name} ({guild.id})" if guild else "unknown-guild"
@@ -510,7 +512,7 @@ async def setup_commands(bot: CountingBot):
         )
         await interaction.response.defer(ephemeral=True, thinking=True)
         username = await last_session_username(bot.client, player_id)
-        now = datetime.utcnow()
+        now = utcnow_naive()
         ctx.models.User.insert(
             discord_user_id=interaction.user.id,
             player_id=player_id,
@@ -833,7 +835,7 @@ async def setup_commands(bot: CountingBot):
         if not admin_ctx:
             return
         ctx, _member = admin_ctx
-        now = datetime.utcnow()
+        now = utcnow_naive()
         ctx.models.User.insert(
             discord_user_id=user.id,
             player_id=player_id,

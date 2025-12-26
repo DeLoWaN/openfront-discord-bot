@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from peewee import (
@@ -14,12 +14,16 @@ from peewee import (
 central_database = SqliteDatabase(None)
 
 
+def utcnow_naive() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 class BaseModel(Model):
-    created_at = DateTimeField(default=datetime.utcnow)
-    updated_at = DateTimeField(default=datetime.utcnow)
+    created_at = DateTimeField(default=utcnow_naive)
+    updated_at = DateTimeField(default=utcnow_naive)
 
     def save(self, *args, **kwargs):  # type: ignore[override]
-        self.updated_at = datetime.utcnow()
+        self.updated_at = utcnow_naive()
         return super().save(*args, **kwargs)
 
     class Meta:

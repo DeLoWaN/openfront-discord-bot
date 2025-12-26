@@ -48,7 +48,7 @@ async def compute_wins_sessions_with_clan(
     wins = 0
     for session in sessions:
         if "clanTag" not in session:
-            match = re.match(
+            match = re.search(
                 r"\[([A-Za-z0-9]+)\]", session.get("username", ""), re.IGNORECASE
             )
             clan_tag = match.group(1).upper() if match else ""

@@ -28,14 +28,16 @@ def _parse_datetime(value: str | None) -> Optional[datetime]:
 
 class OpenFrontClient:
     def __init__(self, session: aiohttp.ClientSession | None = None):
-        self._session = session or aiohttp.ClientSession()
+        self._session = session
         self._owns_session = session is None
 
     async def close(self):
-        if self._owns_session:
+        if self._owns_session and self._session:
             await self._session.close()
 
     async def _request(self, method: str, path: str) -> Any:
+        if self._session is None:
+            self._session = aiohttp.ClientSession()
         url = f"{OPENFRONT_BASE}{path}"
         backoff = 1.0
         for attempt in range(5):

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
@@ -20,6 +20,11 @@ DEFAULT_COUNTING_MODE = "sessions_with_clan"
 DEFAULT_SYNC_INTERVAL = 60
 
 
+def utcnow_naive() -> datetime:
+    """Return current UTC time without tzinfo for SQLite storage."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 @dataclass
 class GuildModels:
     db: SqliteDatabase
@@ -33,11 +38,11 @@ class GuildModels:
 
 def _create_guild_models(db: SqliteDatabase) -> GuildModels:
     class BaseModel(Model):
-        created_at = DateTimeField(default=datetime.utcnow)
-        updated_at = DateTimeField(default=datetime.utcnow)
+        created_at = DateTimeField(default=utcnow_naive)
+        updated_at = DateTimeField(default=utcnow_naive)
 
         def save(self, *args, **kwargs):  # type: ignore[override]
-            self.updated_at = datetime.utcnow()
+            self.updated_at = utcnow_naive()
             return super().save(*args, **kwargs)
 
         class Meta:
