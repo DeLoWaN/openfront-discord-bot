@@ -2,6 +2,9 @@
 
 Discord bot for multiple Discord servers (guilds). It links members to their OpenFront player IDs, counts wins from the public API, and assigns tier roles automatically based on the win thresholds you set. Each server keeps its own small SQLite database so servers stay isolated.
 
+## Hosted version
+This project maintainer graciously provide an hosted version of this bot if you don't have the hardware to do this on your own. Please use [this link](https://discord.com/oauth2/authorize?client_id=1453381112134111354) to install the bot.
+
 ## Prerequisites
 - Python 3.10+ and `pip`
 - Discord application with a bot token; enable the **Server Members Intent**
