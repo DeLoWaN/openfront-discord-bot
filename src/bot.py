@@ -373,13 +373,16 @@ class CountingBot(commands.Bot):
     async def _scheduler_loop(self):
         await self.wait_until_ready()
         base_interval = self.config.sync_interval_hours * 60 * 60
+        first_cycle = True
         while not self.is_closed():
-            guilds = list(self.guilds)
-            random.shuffle(guilds)
-            for guild in guilds:
-                await self.sync_queue.put(guild.id)
-                jitter_seconds = max(1, int(base_interval * 0.01))
-                await asyncio.sleep(random.uniform(0, jitter_seconds))
+            if not first_cycle:
+                guilds = list(self.guilds)
+                random.shuffle(guilds)
+                for guild in guilds:
+                    await self.sync_queue.put(guild.id)
+                    jitter_seconds = max(1, int(base_interval * 0.01))
+                    await asyncio.sleep(random.uniform(0, jitter_seconds))
+            first_cycle = False
             jitter = min(base_interval * 0.1, 300)
             sleep_time = max(5, base_interval + random.uniform(-jitter, jitter))
             await asyncio.sleep(sleep_time)
