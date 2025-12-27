@@ -112,8 +112,8 @@ def _install_discord_stub():
     sys.modules["discord.app_commands"] = app_commands
 
 
-if importlib.util.find_spec("discord") is None:
-    _install_discord_stub()
+# Always stub discord for tests to avoid depending on the real package being installed.
+_install_discord_stub()
 
 
 def _install_peewee_stub():
