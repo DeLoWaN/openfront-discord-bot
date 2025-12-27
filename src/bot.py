@@ -841,10 +841,10 @@ async def setup_commands(bot: CountingBot):
         )
         await interaction.response.send_message(msg, ephemeral=True)
 
+    @app_commands.default_permissions(manage_guild=True)
     @tree.command(
         name="sync",
         description="Trigger immediate sync (optionally for a single user)",
-        default_permissions=discord.Permissions(manage_guild=True),
     )
     @app_commands.describe(user="Optional user; if omitted, sync all linked users")
     async def sync(
@@ -891,10 +891,10 @@ async def setup_commands(bot: CountingBot):
         record_audit(ctx.models, interaction.user.id, "sync", {"scope": "all"})
         await interaction.followup.send(summary, ephemeral=True)
 
+    @app_commands.default_permissions(manage_guild=True)
     @tree.command(
         name="set_mode",
         description="Set counting mode",
-        default_permissions=discord.Permissions(manage_guild=True),
     )
     @app_commands.describe(mode="total | sessions_since_link | sessions_with_clan")
     async def set_mode(interaction: discord.Interaction, mode: str):
@@ -922,10 +922,10 @@ async def setup_commands(bot: CountingBot):
             f"Counting mode set to {mode}", ephemeral=True
         )
 
+    @app_commands.default_permissions(manage_guild=True)
     @tree.command(
         name="get_mode",
         description="Show current counting mode",
-        default_permissions=discord.Permissions(manage_guild=True),
     )
     async def get_mode(interaction: discord.Interaction):
         admin_ctx = await require_admin(interaction)
@@ -937,10 +937,10 @@ async def setup_commands(bot: CountingBot):
             f"Current counting mode: {settings.counting_mode}", ephemeral=True
         )
 
+    @app_commands.default_permissions(manage_guild=True)
     @tree.command(
         name="roles_add",
         description="Add or update a threshold role",
-        default_permissions=discord.Permissions(manage_guild=True),
     )
     async def roles_add(
         interaction: discord.Interaction,
@@ -973,10 +973,10 @@ async def setup_commands(bot: CountingBot):
             f"Saved threshold: {wins} wins -> <@&{role.id}>", ephemeral=True
         )
 
+    @app_commands.default_permissions(manage_guild=True)
     @tree.command(
         name="roles_remove",
         description="Remove a threshold role",
-        default_permissions=discord.Permissions(manage_guild=True),
     )
     async def roles_remove(
         interaction: discord.Interaction,
@@ -1031,10 +1031,10 @@ async def setup_commands(bot: CountingBot):
             "\n".join(lines) or "No roles configured", ephemeral=True
         )
 
+    @app_commands.default_permissions(manage_guild=True)
     @tree.command(
         name="clan_tag_add",
         description="Add a clan tag",
-        default_permissions=discord.Permissions(manage_guild=True),
     )
     async def clan_tag_add(interaction: discord.Interaction, tag: str):
         admin_ctx = await require_admin(interaction)
@@ -1055,10 +1055,10 @@ async def setup_commands(bot: CountingBot):
             f"Clan tag '{tag_norm}' added", ephemeral=True
         )
 
+    @app_commands.default_permissions(manage_guild=True)
     @tree.command(
         name="clan_tag_remove",
         description="Remove a clan tag",
-        default_permissions=discord.Permissions(manage_guild=True),
     )
     async def clan_tag_remove(interaction: discord.Interaction, tag: str):
         admin_ctx = await require_admin(interaction)
@@ -1094,10 +1094,10 @@ async def setup_commands(bot: CountingBot):
             ", ".join(tags) or "No clan tags configured.", ephemeral=True
         )
 
+    @app_commands.default_permissions(manage_guild=True)
     @tree.command(
         name="link_override",
         description="Admin override link",
-        default_permissions=discord.Permissions(manage_guild=True),
     )
     async def link_override(
         interaction: discord.Interaction, user: discord.Member, player_id: str
@@ -1131,10 +1131,10 @@ async def setup_commands(bot: CountingBot):
             f"Linked {user.display_name} to {player_id}", ephemeral=True
         )
 
+    @app_commands.default_permissions(manage_guild=True)
     @tree.command(
         name="audit",
         description="Show recent audit events",
-        default_permissions=discord.Permissions(manage_guild=True),
     )
     async def audit(interaction: discord.Interaction, page: int = 1):
         admin_ctx = await require_admin(interaction)
@@ -1159,10 +1159,10 @@ async def setup_commands(bot: CountingBot):
             "\n".join(lines) or "No audit entries", ephemeral=True
         )
 
+    @app_commands.default_permissions(manage_guild=True)
     @tree.command(
         name="admin_role_add",
         description="Add an admin role for this guild",
-        default_permissions=discord.Permissions(manage_guild=True),
     )
     async def admin_role_add(interaction: discord.Interaction, role: discord.Role):
         admin_ctx = await require_admin(interaction)
@@ -1194,10 +1194,10 @@ async def setup_commands(bot: CountingBot):
             f"Added admin permission to role <@&{role.id}>", ephemeral=True
         )
 
+    @app_commands.default_permissions(manage_guild=True)
     @tree.command(
         name="admin_role_remove",
         description="Remove an admin role for this guild",
-        default_permissions=discord.Permissions(manage_guild=True),
     )
     async def admin_role_remove(interaction: discord.Interaction, role: discord.Role):
         admin_ctx = await require_admin(interaction)
@@ -1235,10 +1235,10 @@ async def setup_commands(bot: CountingBot):
             ephemeral=True,
         )
 
+    @app_commands.default_permissions(manage_guild=True)
     @tree.command(
         name="admin_roles",
         description="List admin roles for this guild",
-        default_permissions=discord.Permissions(manage_guild=True),
     )
     async def admin_roles(interaction: discord.Interaction):
         admin_ctx = await require_admin(interaction)
@@ -1257,10 +1257,10 @@ async def setup_commands(bot: CountingBot):
             "\n".join(lines) or "No admin roles configured.", ephemeral=True
         )
 
+    @app_commands.default_permissions(manage_guild=True)
     @tree.command(
         name="guild_remove",
         description="Remove this guild from the bot and delete its data",
-        default_permissions=discord.Permissions(manage_guild=True),
     )
     @app_commands.describe(confirm="Set to true to confirm deletion")
     async def guild_remove(interaction: discord.Interaction, confirm: bool = False):

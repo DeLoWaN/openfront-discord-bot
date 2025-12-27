@@ -61,6 +61,12 @@ def _install_discord_stub():
 
         return decorator
 
+    def default_permissions(*args, **kwargs):
+        def decorator(func):
+            return func
+
+        return decorator
+
     def _decorator_passthrough(*args, **kwargs):
         def decorator(func):
             return func
@@ -69,6 +75,7 @@ def _install_discord_stub():
 
     app_commands = types.SimpleNamespace(
         describe=describe,
+        default_permissions=default_permissions,
         AppCommandError=AppCommandError,
         CheckFailure=CheckFailure,
     )
