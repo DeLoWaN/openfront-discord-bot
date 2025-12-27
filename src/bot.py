@@ -783,7 +783,10 @@ async def setup_commands(bot: CountingBot):
         if user:
             requester = _member_from_interaction(interaction)
             if not requester or not bot._member_is_admin(requester, ctx):
-                await interaction.response.send_message("Admin only.", ephemeral=True)
+                await interaction.response.send_message(
+                    "Admins only: you need admin permissions to check another user.",
+                    ephemeral=True,
+                )
                 return
         record = ctx.models.User.get_or_none(
             ctx.models.User.discord_user_id == target.id
@@ -895,7 +898,10 @@ async def setup_commands(bot: CountingBot):
             return
         ctx, _member = admin_ctx
         if mode not in COUNTING_MODES:
-            await interaction.response.send_message("Invalid mode", ephemeral=True)
+            await interaction.response.send_message(
+                "Invalid mode. Choose one of total | sessions_since_link | sessions_with_clan.",
+                ephemeral=True,
+            )
             return
         settings = ctx.models.Settings.get_by_id(1)
         settings.counting_mode = mode
@@ -950,7 +956,9 @@ async def setup_commands(bot: CountingBot):
             "roles_add",
             {"wins": wins, "role_id": role.id},
         )
-        await interaction.response.send_message("Role threshold saved.", ephemeral=True)
+        await interaction.response.send_message(
+            f"Saved threshold: {wins} wins -> <@&{role.id}>", ephemeral=True
+        )
 
     @tree.command(name="roles_remove", description="Remove a threshold role")
     async def roles_remove(
@@ -964,7 +972,7 @@ async def setup_commands(bot: CountingBot):
         ctx, _member = admin_ctx
         if wins is None and role is None:
             await interaction.response.send_message(
-                "Provide wins or role.", ephemeral=True
+                "Provide wins or role to remove.", ephemeral=True
             )
             return
         actor_label = user_label(interaction.user.id, interaction.user, ctx.models)
@@ -989,7 +997,7 @@ async def setup_commands(bot: CountingBot):
             {"wins": wins, "role": role.id if role else None},
         )
         await interaction.response.send_message(
-            f"Removed {deleted} entries.", ephemeral=True
+            f"Removed {deleted} role threshold(s).", ephemeral=True
         )
 
     @tree.command(name="roles", description="List role thresholds")
@@ -1048,7 +1056,7 @@ async def setup_commands(bot: CountingBot):
             ctx.models, interaction.user.id, "clan_tag_remove", {"tag": tag_norm}
         )
         await interaction.response.send_message(
-            f"Removed {deleted} entries", ephemeral=True
+            f"Removed {deleted} clan tag(s) matching '{tag_norm}'", ephemeral=True
         )
 
     @tree.command(name="clans_list", description="List clan tags")
@@ -1058,7 +1066,7 @@ async def setup_commands(bot: CountingBot):
             return
         tags = [ct.tag_text for ct in ctx.models.ClanTag.select()]
         await interaction.response.send_message(
-            ", ".join(tags) or "No clans configured", ephemeral=True
+            ", ".join(tags) or "No clan tags configured.", ephemeral=True
         )
 
     @tree.command(name="link_override", description="Admin override link")
@@ -1137,7 +1145,7 @@ async def setup_commands(bot: CountingBot):
             ctx.models, interaction.user.id, "admin_role_add", {"role_id": role.id}
         )
         await interaction.response.send_message(
-            f"Added admin role <@&{role.id}>", ephemeral=True
+            f"Added admin permission to role <@&{role.id}>", ephemeral=True
         )
 
     @tree.command(
@@ -1166,7 +1174,7 @@ async def setup_commands(bot: CountingBot):
             ctx.models, interaction.user.id, "admin_role_remove", {"role_id": role.id}
         )
         await interaction.response.send_message(
-            f"Removed {deleted} entries for role <@&{role.id}>",
+            f"Removed admin permissions from role <@&{role.id}>",
             ephemeral=True,
         )
 

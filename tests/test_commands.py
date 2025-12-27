@@ -179,7 +179,7 @@ def test_admin_role_add_response_mentions_role(tmp_path):
 
     asyncio.run(commands["admin_role_add"](interaction, role))
 
-    assert interaction.response.message == "Added admin role <@&321>"
+    assert interaction.response.message == "Added admin permission to role <@&321>"
     assert interaction.response.ephemeral is True
 
 
@@ -199,7 +199,7 @@ def test_admin_role_remove_response_mentions_role(tmp_path):
 
     asyncio.run(commands["admin_role_remove"](interaction, role))
 
-    assert interaction.response.message == "Removed 1 entries for role <@&321>"
+    assert interaction.response.message == "Removed admin permissions from role <@&321>"
     assert interaction.response.ephemeral is True
 
 
@@ -397,7 +397,7 @@ def test_roles_remove_and_list(tmp_path):
     asyncio.run(commands["roles_remove"](interaction_remove, wins=5))
 
     assert ctx.models.RoleThreshold.select().count() == 1
-    assert interaction_remove.response.message == "Removed 1 entries."
+    assert interaction_remove.response.message == "Removed 1 role threshold(s)."
     assert interaction_remove.response.ephemeral is True
 
     interaction_roles = CommandInteraction(guild=guild, user=admin)
@@ -427,7 +427,7 @@ def test_clan_tag_add_remove_and_list(tmp_path):
 
     interaction_remove = CommandInteraction(guild=guild, user=admin)
     asyncio.run(commands["clan_tag_remove"](interaction_remove, "abc"))
-    assert interaction_remove.response.message == "Removed 1 entries"
+    assert interaction_remove.response.message == "Removed 1 clan tag(s) matching 'ABC'"
 
 
 def test_link_override_sets_user(tmp_path):
