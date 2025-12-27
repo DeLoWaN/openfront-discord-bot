@@ -177,10 +177,18 @@ def test_admin_role_add_response_mentions_role(tmp_path):
     interaction = CommandInteraction(guild=guild, user=member)
     role = FakeRole(321, "Admin")
 
+    sync_called = {}
+
+    async def fake_sync(g):
+        sync_called["guild"] = g.id
+
+    bot._sync_commands_for_guild = fake_sync
+
     asyncio.run(commands["admin_role_add"](interaction, role))
 
     assert interaction.response.message == "Added admin permission to role <@&321>"
     assert interaction.response.ephemeral is True
+    assert sync_called["guild"] == guild.id
 
 
 def test_admin_role_remove_response_mentions_role(tmp_path):
@@ -197,10 +205,18 @@ def test_admin_role_remove_response_mentions_role(tmp_path):
     interaction = CommandInteraction(guild=guild, user=member)
     role = FakeRole(321, "Admin")
 
+    sync_called = {}
+
+    async def fake_sync(g):
+        sync_called["guild"] = g.id
+
+    bot._sync_commands_for_guild = fake_sync
+
     asyncio.run(commands["admin_role_remove"](interaction, role))
 
     assert interaction.response.message == "Removed admin permissions from role <@&321>"
     assert interaction.response.ephemeral is True
+    assert sync_called["guild"] == guild.id
 
 
 def test_admin_roles_lists_mentions(tmp_path):

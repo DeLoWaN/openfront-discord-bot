@@ -43,6 +43,11 @@ def _install_discord_stub():
     class User:
         pass
 
+    class Permissions:
+        def __init__(self, **flags):
+            self.administrator = flags.get("administrator", False)
+            self.manage_guild = flags.get("manage_guild", False)
+
     # app_commands stub
     class AppCommandError(Exception):
         pass
@@ -99,6 +104,7 @@ def _install_discord_stub():
     discord.InteractionType = InteractionType
     discord.Interaction = Interaction
     discord.abc = types.SimpleNamespace(User=User)
+    discord.Permissions = Permissions
     discord.Member = Member
     discord.Role = Role
     discord.Guild = Guild
