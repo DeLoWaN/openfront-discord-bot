@@ -12,7 +12,7 @@ class BotConfig:
     token: str
     log_level: str
     central_database_path: str
-    sync_interval_minutes: int
+    sync_interval_hours: int
 
 
 def load_config(path: str | None = None) -> BotConfig:
@@ -35,16 +35,16 @@ def load_config(path: str | None = None) -> BotConfig:
     if not central_database_path:
         raise ValueError("Config missing 'central_database_path'")
 
-    interval_raw = data.get("sync_interval_minutes", 60)
+    interval_raw = data.get("sync_interval_hours", 24)
     try:
-        sync_interval_minutes = int(interval_raw)
+        sync_interval_hours = int(interval_raw)
     except (TypeError, ValueError):
-        raise ValueError("sync_interval_minutes must be an integer")
-    sync_interval_minutes = max(5, min(24 * 60, sync_interval_minutes))
+        raise ValueError("sync_interval_hours must be an integer")
+    sync_interval_hours = max(1, min(24, sync_interval_hours))
 
     return BotConfig(
         token=token,
         log_level=log_level,
         central_database_path=central_database_path,
-        sync_interval_minutes=sync_interval_minutes,
+        sync_interval_hours=sync_interval_hours,
     )

@@ -33,7 +33,7 @@ Discord bot for multiple Discord servers (guilds). It links members to their Ope
    token: "DISCORD_BOT_TOKEN"
    central_database_path: "central.db"  # Registry for all guilds the bot joins
    log_level: "INFO"                    # CRITICAL | ERROR | WARNING | INFO | DEBUG
-   sync_interval_minutes: 60            # Background sync for every guild (5–1440)
+   sync_interval_hours: 24             # Background sync for every guild (1–24 hours)
    ```
    - You can set an environment variable `CONFIG_PATH=/absolute/path/to/config.yml` if the file lives elsewhere.
 
@@ -45,7 +45,7 @@ python -m src.bot
 - A small central DB is created at `central.db` (configurable) and one DB per server is created on first join under `guild_data/guild_<guild_id>.db`. Tables are created automatically; set up role thresholds via commands after the bot joins.
 - Admin roles are auto-seeded from server roles that have `Administrator` or `Manage Guild`. You can add/remove admin roles later with commands.
 - Slash commands sync automatically to every guild the bot is in.
-- The background sync interval is global and comes from `sync_interval_minutes` in the config (default 60 minutes for every guild).
+- The background sync interval is global and comes from `sync_interval_hours` in the config (default 24 hours for every guild).
 - `/guild_remove` deletes a guild’s data and the bot leaves; re-invite to start fresh.
 
 ## After first launch

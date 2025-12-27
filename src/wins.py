@@ -85,7 +85,7 @@ async def compute_wins_sessions_with_clan(
             continue
         if client.session_win(session):
             wins += 1
-    LOGGER.info(
+    LOGGER.debug(
         "Clan wins for %s: %s wins across %s sessions (tags=%s)",
         player_id,
         wins,

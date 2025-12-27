@@ -9,7 +9,9 @@ OPENFRONT_BASE = "https://api.openfront.io"
 
 
 class OpenFrontError(Exception):
-    pass
+    def __init__(self, message: str, status: int | None = None):
+        super().__init__(message)
+        self.status = status
 
 
 def _parse_datetime(value: str | None) -> Optional[datetime]:
@@ -40,16 +42,23 @@ class OpenFrontClient:
             self._session = aiohttp.ClientSession()
         url = f"{OPENFRONT_BASE}{path}"
         backoff = 1.0
+        last_status: int | None = None
         for attempt in range(5):
             try:
                 async with self._session.request(method, url) as resp:
                     if resp.status in (429, 500, 502, 503, 504):
-                        raise OpenFrontError(f"Transient error {resp.status}")
+                        raise OpenFrontError(
+                            f"Transient error {resp.status}", resp.status
+                        )
                     resp.raise_for_status()
                     return await resp.json()
             except Exception as exc:
+                status = getattr(exc, "status", None)
+                last_status = status or last_status
                 if attempt == 4:
-                    raise OpenFrontError(f"Failed request {url}: {exc}") from exc
+                    raise OpenFrontError(
+                        f"Failed request {url}: {exc}", status=last_status
+                    ) from exc
                 await asyncio.sleep(backoff + random.random())
                 backoff *= 2
 

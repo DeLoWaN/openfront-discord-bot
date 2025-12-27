@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
@@ -70,8 +71,6 @@ class GuildContext:
     models: GuildModels
     admin_role_ids: Set[int]
     sync_lock: asyncio.Lock
-    sync_event: asyncio.Event
-    sync_task: asyncio.Task[None] | None = None
 
 
 async def determine_target_role(
@@ -175,6 +174,8 @@ def admin_role_ids_from_permissions(guild: discord.Guild) -> List[int]:
 
 
 class CountingBot(commands.Bot):
+    MAX_CONCURRENT_GUILD_SYNCS = 3
+
     def __init__(self, config: BotConfig):
         intents = discord.Intents.default()
         intents.members = True
@@ -186,6 +187,12 @@ class CountingBot(commands.Bot):
         self.guild_data_dir = Path("guild_data")
         self.guild_data_dir.mkdir(parents=True, exist_ok=True)
         init_central_db(config.central_database_path)
+        self.sync_queue: asyncio.Queue[int] = asyncio.Queue()
+        self.role_queue: asyncio.Queue[Any] = asyncio.Queue()
+        self.sync_worker_tasks: list[asyncio.Task[None]] = []
+        self.role_worker_task: asyncio.Task[None] | None = None
+        self.scheduler_task: asyncio.Task[None] | None = None
+        self.audit_cleanup_task: asyncio.Task[None] | None = None
 
     def guild_db_path(self, guild_id: int) -> str:
         return str(self.guild_data_dir / f"guild_{guild_id}.db")
@@ -194,14 +201,53 @@ class CountingBot(commands.Bot):
         return self.guild_contexts.get(guild_id)
 
     async def close(self) -> None:
+        if self.scheduler_task:
+            self.scheduler_task.cancel()
+        if self.audit_cleanup_task:
+            self.audit_cleanup_task.cancel()
+        if self.role_worker_task:
+            self.role_worker_task.cancel()
+        for task in self.sync_worker_tasks:
+            task.cancel()
+        for task in self.sync_worker_tasks:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        if self.role_worker_task:
+            try:
+                await self.role_worker_task
+            except asyncio.CancelledError:
+                pass
+        if self.scheduler_task:
+            try:
+                await self.scheduler_task
+            except asyncio.CancelledError:
+                pass
+        if self.audit_cleanup_task:
+            try:
+                await self.audit_cleanup_task
+            except asyncio.CancelledError:
+                pass
         for ctx in list(self.guild_contexts.values()):
-            await self._stop_sync_task(ctx)
             ctx.models.db.close()
         await super().close()
         await self.client.close()
 
     async def setup_hook(self) -> None:
         await self.tree.sync()
+        await self._start_workers()
+
+    async def _start_workers(self):
+        if self.scheduler_task:
+            return
+        self.role_worker_task = self.loop.create_task(self._role_worker())
+        self.sync_worker_tasks = [
+            self.loop.create_task(self._sync_worker())
+            for _ in range(self.MAX_CONCURRENT_GUILD_SYNCS)
+        ]
+        self.scheduler_task = self.loop.create_task(self._scheduler_loop())
+        self.audit_cleanup_task = self.loop.create_task(self._audit_cleanup_loop())
 
     async def _sync_commands_for_guild(self, guild: discord.Guild):
         try:
@@ -230,6 +276,7 @@ class CountingBot(commands.Bot):
         LOGGER.info("New guild joined: %s (%s)", guild.name, guild.id)
         await self._ensure_guild_registered(guild)
         await self._sync_commands_for_guild(guild)
+        self.sync_queue.put_nowait(guild.id)
 
     async def on_guild_remove(self, guild: discord.Guild):
         LOGGER.info("Removed from guild %s (%s); deleting data", guild.name, guild.id)
@@ -255,6 +302,8 @@ class CountingBot(commands.Bot):
                     guild_id,
                 )
                 await self._delete_guild_data(int(guild_id), str(entry.database_path))
+        for guild in self.guilds:
+            self.sync_queue.put_nowait(guild.id)
 
     def _load_admin_role_ids(self, models: GuildModels) -> Set[int]:
         return {row.role_id for row in models.GuildAdminRole.select()}
@@ -294,25 +343,13 @@ class CountingBot(commands.Bot):
             models=models,
             admin_role_ids=admin_role_ids,
             sync_lock=asyncio.Lock(),
-            sync_event=asyncio.Event(),
         )
         self.guild_contexts[guild.id] = ctx
-        ctx.sync_task = self.loop.create_task(self._sync_loop(ctx))
         return ctx
-
-    async def _stop_sync_task(self, ctx: GuildContext):
-        if ctx.sync_task and not ctx.sync_task.done():
-            ctx.sync_task.cancel()
-            try:
-                await ctx.sync_task
-            except asyncio.CancelledError:
-                pass
-        ctx.sync_task = None
 
     async def _delete_guild_data(self, guild_id: int, db_path: Optional[str] = None):
         ctx = self.guild_contexts.pop(guild_id, None)
         if ctx:
-            await self._stop_sync_task(ctx)
             try:
                 ctx.models.db.close()
             except Exception as exc:
@@ -332,26 +369,81 @@ class CountingBot(commands.Bot):
         if not removed:
             LOGGER.info("Guild %s was not present in central DB", guild_id)
 
-    async def _sync_loop(self, ctx: GuildContext):
+    async def _scheduler_loop(self):
+        await self.wait_until_ready()
+        base_interval = self.config.sync_interval_hours * 60 * 60
+        while not self.is_closed():
+            guilds = list(self.guilds)
+            random.shuffle(guilds)
+            for guild in guilds:
+                await self.sync_queue.put(guild.id)
+                jitter_seconds = max(1, int(base_interval * 0.01))
+                await asyncio.sleep(random.uniform(0, jitter_seconds))
+            jitter = min(base_interval * 0.1, 300)
+            sleep_time = max(5, base_interval + random.uniform(-jitter, jitter))
+            await asyncio.sleep(sleep_time)
+
+    async def _sync_worker(self):
         await self.wait_until_ready()
         while not self.is_closed():
+            guild_id = await self.sync_queue.get()
+            ctx = self.get_guild_context(guild_id)
+            if not ctx:
+                continue
             try:
                 await self.run_sync(ctx)
             except Exception as exc:
-                LOGGER.exception(
-                    "Background sync failed for guild %s: %s", ctx.guild_id, exc
+                LOGGER.exception("Sync worker failed for guild %s: %s", guild_id, exc)
+
+    async def _role_worker(self):
+        await self.wait_until_ready()
+        retry_delay_default = 5
+        while not self.is_closed():
+            job = await self.role_queue.get()
+            try:
+                role_id = await apply_roles(
+                    job["member"], job["thresholds"], job["wins"]
                 )
-            sleep_task = asyncio.create_task(
-                asyncio.sleep(self.config.sync_interval_minutes * 60)
-            )
-            event_task = asyncio.create_task(ctx.sync_event.wait())
-            done, pending = await asyncio.wait(
-                {sleep_task, event_task},
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            for task in pending:
-                task.cancel()
-            ctx.sync_event.clear()
+                job["future"].set_result(role_id)
+            except discord.HTTPException as exc:
+                if exc.status == 429:
+                    retry_after = getattr(exc, "retry_after", None)
+                    delay = (retry_after or retry_delay_default) + 1
+                    LOGGER.warning(
+                        "Role update rate limited (429). Backing off for %ss", delay
+                    )
+                    await asyncio.sleep(delay)
+                    try:
+                        role_id = await apply_roles(
+                            job["member"], job["thresholds"], job["wins"]
+                        )
+                        job["future"].set_result(role_id)
+                    except Exception as exc_inner:
+                        LOGGER.warning(
+                            "Role update failed after backoff for user %s: %s",
+                            user_label(job["member"].id, job["member"]),
+                            exc_inner,
+                        )
+                        job["future"].set_exception(exc_inner)
+                else:
+                    job["future"].set_exception(exc)
+            except Exception as exc:
+                job["future"].set_exception(exc)
+
+    async def _audit_cleanup_loop(self):
+        await self.wait_until_ready()
+        while not self.is_closed():
+            cutoff = utcnow_naive() - timedelta(days=90)
+            for ctx in list(self.guild_contexts.values()):
+                try:
+                    ctx.models.Audit.delete().where(
+                        ctx.models.Audit.created_at < cutoff
+                    ).execute()
+                except Exception as exc:
+                    LOGGER.warning(
+                        "Audit cleanup failed for guild %s: %s", ctx.guild_id, exc
+                    )
+            await asyncio.sleep(24 * 60 * 60)
 
     async def run_sync(self, ctx: GuildContext, manual: bool = False) -> str:
         if ctx.sync_lock.locked():
@@ -386,10 +478,20 @@ class CountingBot(commands.Bot):
             processed = 0
             failures = 0
             openfront_failure = False
+            disabled_count = 0
+            warnings: list[str] = []
             for user in users:
+                if user.disabled and not manual:
+                    disabled_count += 1
+                    continue
                 member = guild.get_member(user.discord_user_id)
                 if not member:
-                    LOGGER.info(
+                    try:
+                        member = await guild.fetch_member(user.discord_user_id)
+                    except Exception:
+                        member = None
+                if not member:
+                    LOGGER.warning(
                         "User %s not in guild %s, skipping",
                         user_label(user.discord_user_id, models=ctx.models),
                         guild.id,
@@ -401,14 +503,19 @@ class CountingBot(commands.Bot):
                         user, settings.counting_mode, clan_tags
                     )
                     user.last_win_count = win_count
-                    target_role_id = await apply_roles(member, thresholds, win_count)
+                    user.consecutive_404 = 0
+                    user.disabled = 0
+                    user.last_error_reason = None
+                    target_role_id = await self.apply_roles_with_queue(
+                        member, thresholds, win_count
+                    )
                     user.last_role_id = target_role_id
                     user.last_username = getattr(member, "display_name", None)
                     user.save()
                     role_action = (
                         "unchanged" if target_role_id == previous_role_id else "updated"
                     )
-                    LOGGER.info(
+                    LOGGER.debug(
                         "Sync user guild=%s user=%s player=%s mode=%s wins=%s role=%s prev_role=%s action=%s",
                         guild.id,
                         user_label(user.discord_user_id, member, ctx.models),
@@ -423,7 +530,23 @@ class CountingBot(commands.Bot):
                 except Exception as exc:
                     failures += 1
                     if isinstance(exc, OpenFrontError):
-                        openfront_failure = True
+                        status = getattr(exc, "status", None)
+                        if status == 404:
+                            user.consecutive_404 += 1
+                            user.last_error_reason = "404:player_not_found"
+                            if user.consecutive_404 >= 3:
+                                user.disabled = 1
+                                disabled_count += 1
+                                warning_msg = (
+                                    f"User {user_label(user.discord_user_id, member, ctx.models)} "
+                                    "disabled after 3x 404 player not found."
+                                )
+                                warnings.append(warning_msg)
+                                LOGGER.warning(warning_msg)
+                        else:
+                            openfront_failure = True
+                            user.last_error_reason = str(exc)
+                        user.save()
                     LOGGER.exception(
                         "Failed syncing user %s in guild %s: %s",
                         user_label(user.discord_user_id, member, ctx.models),
@@ -434,7 +557,7 @@ class CountingBot(commands.Bot):
                 backoff_target = utcnow_naive() + timedelta(minutes=5)
                 settings.backoff_until = backoff_target
                 LOGGER.warning(
-                    "OpenFront errors detected; backing off guild %s until %s",
+                    "Possible OpenFront rate limiting; backing off guild %s until %s",
                     guild.id,
                     backoff_target,
                 )
@@ -442,7 +565,7 @@ class CountingBot(commands.Bot):
                 settings.backoff_until = None
             settings.last_sync_at = utcnow_naive()
             settings.save()
-            summary = f"Processed {processed} users, failures: {failures}"
+            summary = f"Processed {processed} users, failures: {failures}, disabled: {disabled_count}"
             guild_label = f"{guild.name} ({guild.id})" if guild else "unknown-guild"
             LOGGER.info("Guild %s sync: %s", guild_label, summary)
             return summary
@@ -462,7 +585,20 @@ class CountingBot(commands.Bot):
         raise ValueError(f"Unknown counting mode {mode}")
 
     def trigger_sync(self, ctx: GuildContext):
-        ctx.sync_event.set()
+        self.sync_queue.put_nowait(ctx.guild_id)
+
+    async def apply_roles_with_queue(
+        self, member: Any, thresholds: Iterable[Threshold], win_count: int
+    ) -> int | None:
+        future: asyncio.Future[int | None] = self.loop.create_future()
+        job = {
+            "member": member,
+            "thresholds": thresholds,
+            "wins": win_count,
+            "future": future,
+        }
+        await self.role_queue.put(job)
+        return await future
 
 
 def _member_from_interaction(
@@ -597,7 +733,9 @@ async def setup_commands(bot: CountingBot):
                 member = guild.get_member(record.discord_user_id)
             thresholds = list(ctx.models.RoleThreshold.select())
             if member:
-                record.last_role_id = await apply_roles(member, thresholds, win_count)
+                record.last_role_id = await bot.apply_roles_with_queue(
+                    member, thresholds, win_count
+                )
             record.save()
         except Exception as exc:
             LOGGER.warning(
@@ -652,6 +790,12 @@ async def setup_commands(bot: CountingBot):
         settings = ctx.models.Settings.get_by_id(1)
         if not record:
             await interaction.response.send_message("Not linked.", ephemeral=True)
+            return
+        if record.disabled:
+            await interaction.response.send_message(
+                "Sync disabled for this user (player not found after multiple attempts). Please re-link.",
+                ephemeral=True,
+            )
             return
         role_line = "Last role: none"
         if record.last_role_id:
@@ -713,6 +857,12 @@ async def setup_commands(bot: CountingBot):
             if not record:
                 await interaction.followup.send("User not linked.", ephemeral=True)
                 return
+            if record.disabled:
+                await interaction.followup.send(
+                    "Sync disabled for this user (player not found). Ask them to re-link.",
+                    ephemeral=True,
+                )
+                return
             settings = ctx.models.Settings.get_by_id(1)
             clan_tags = [ct.tag_text for ct in ctx.models.ClanTag.select()]
             win_count = await bot._compute_wins(
@@ -720,7 +870,9 @@ async def setup_commands(bot: CountingBot):
             )
             record.last_win_count = win_count
             thresholds = list(ctx.models.RoleThreshold.select())
-            record.last_role_id = await apply_roles(user, thresholds, win_count)
+            record.last_role_id = await bot.apply_roles_with_queue(
+                user, thresholds, win_count
+            )
             record.last_username = getattr(user, "display_name", None)
             record.save()
             record_audit(

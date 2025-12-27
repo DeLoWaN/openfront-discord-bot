@@ -2,7 +2,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
-from src.bot import BotConfig, CountingBot, GuildContext
+from src.bot import BotConfig, CountingBot, GuildContext, apply_roles
 from src.models import init_guild_db
 from tests.fakes import FakeGuild, FakeMember, FakeOpenFront, FakeRole
 
@@ -12,11 +12,17 @@ def make_bot(tmp_path):
         token="dummy",
         log_level="INFO",
         central_database_path=str(tmp_path / "central.db"),
-        sync_interval_minutes=60,
+        sync_interval_hours=24,
     )
     bot = CountingBot(config)
     bot.guild_data_dir = tmp_path / "guild_data"
     bot.guild_data_dir.mkdir(parents=True, exist_ok=True)
+
+    # For tests, bypass the background role queue.
+    async def immediate_apply(member, thresholds, wins):
+        return await apply_roles(member, thresholds, wins)
+
+    bot.apply_roles_with_queue = cast(Any, immediate_apply)
     return bot
 
 
@@ -29,7 +35,6 @@ def make_context(tmp_path, guild_id=123):
         models=models,
         admin_role_ids=set(),
         sync_lock=asyncio.Lock(),
-        sync_event=asyncio.Event(),
     )
     return ctx
 

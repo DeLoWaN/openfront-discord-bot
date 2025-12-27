@@ -17,7 +17,7 @@ from peewee import (
 )
 
 DEFAULT_COUNTING_MODE = "sessions_with_clan"
-DEFAULT_SYNC_INTERVAL = 60
+DEFAULT_SYNC_INTERVAL = 24 * 60
 
 
 def utcnow_naive() -> datetime:
@@ -55,6 +55,9 @@ def _create_guild_models(db: SqliteDatabase) -> GuildModels:
         last_win_count = IntegerField(default=0)
         last_role_id = IntegerField(null=True)
         last_username = CharField(null=True)
+        consecutive_404 = IntegerField(default=0)
+        disabled = IntegerField(default=0)  # store as int for SQLite compatibility
+        last_error_reason = TextField(null=True)
 
     class RoleThreshold(BaseModel):
         id = AutoField()
@@ -117,6 +120,18 @@ def init_guild_db(path: str, guild_id: int) -> GuildModels:
         if "last_username" not in col_names:
             db.execute_sql(
                 f"ALTER TABLE {models.User._meta.table_name} ADD COLUMN last_username TEXT"
+            )
+        if "consecutive_404" not in col_names:
+            db.execute_sql(
+                f"ALTER TABLE {models.User._meta.table_name} ADD COLUMN consecutive_404 INTEGER NOT NULL DEFAULT 0"
+            )
+        if "disabled" not in col_names:
+            db.execute_sql(
+                f"ALTER TABLE {models.User._meta.table_name} ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0"
+            )
+        if "last_error_reason" not in col_names:
+            db.execute_sql(
+                f"ALTER TABLE {models.User._meta.table_name} ADD COLUMN last_error_reason TEXT"
             )
         # Remove legacy role_name column by recreating the table without it if present.
         rt_table = models.RoleThreshold._meta.table_name
