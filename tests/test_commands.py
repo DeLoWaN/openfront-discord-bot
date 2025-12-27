@@ -179,7 +179,7 @@ def test_admin_role_add_response_mentions_role(tmp_path):
 
     asyncio.run(commands["admin_role_add"](interaction, role))
 
-    assert interaction.response.message == "Added admin role <@&321> (Admin)"
+    assert interaction.response.message == "Added admin role <@&321>"
     assert interaction.response.ephemeral is True
 
 
@@ -199,7 +199,7 @@ def test_admin_role_remove_response_mentions_role(tmp_path):
 
     asyncio.run(commands["admin_role_remove"](interaction, role))
 
-    assert interaction.response.message == "Removed 1 entries for role <@&321> (Admin)"
+    assert interaction.response.message == "Removed 1 entries for role <@&321>"
     assert interaction.response.ephemeral is True
 
 
@@ -218,7 +218,7 @@ def test_admin_roles_lists_mentions(tmp_path):
 
     asyncio.run(commands["admin_roles"](interaction))
 
-    assert interaction.response.message == "<@&321> (Admin)"
+    assert interaction.response.message == "<@&321>"
     assert interaction.response.ephemeral is True
 
 

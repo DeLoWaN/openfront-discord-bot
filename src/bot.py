@@ -1137,7 +1137,7 @@ async def setup_commands(bot: CountingBot):
             ctx.models, interaction.user.id, "admin_role_add", {"role_id": role.id}
         )
         await interaction.response.send_message(
-            f"Added admin role <@&{role.id}> ({role.name})", ephemeral=True
+            f"Added admin role <@&{role.id}>", ephemeral=True
         )
 
     @tree.command(
@@ -1166,7 +1166,7 @@ async def setup_commands(bot: CountingBot):
             ctx.models, interaction.user.id, "admin_role_remove", {"role_id": role.id}
         )
         await interaction.response.send_message(
-            f"Removed {deleted} entries for role <@&{role.id}> ({role.name})",
+            f"Removed {deleted} entries for role <@&{role.id}>",
             ephemeral=True,
         )
 
@@ -1183,7 +1183,7 @@ async def setup_commands(bot: CountingBot):
                 interaction.guild.get_role(row.role_id) if interaction.guild else None
             )
             label = role_obj.name if role_obj else "unknown role"
-            lines.append(f"<@&{row.role_id}> ({label})")
+            lines.append(f"<@&{row.role_id}>")
         await interaction.response.send_message(
             "\n".join(lines) or "No admin roles configured.", ephemeral=True
         )
