@@ -1,3 +1,4 @@
 token: "YOUR_DISCORD_BOT_TOKEN"
 central_database_path: "central.db"
 log_level: "INFO" # Options: CRITICAL, ERROR, WARNING, INFO, DEBUG
+sync_interval_minutes: 60 # Background sync cadence for all guilds (5-1440)

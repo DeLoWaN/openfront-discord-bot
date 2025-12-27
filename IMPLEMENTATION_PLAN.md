@@ -23,7 +23,7 @@
 - `users(discord_user_id PK int64, player_id text, linked_at datetime UTC, last_win_count int default 0, last_role_id int64 nullable, last_username text nullable, created_at/updated_at)`.
 - `roles_thresholds(id PK, wins int unique, role_id int64 unique, created_at/updated_at)`.
 - `clan_tags(id PK, tag_text text uppercased, created_at/updated_at)`.
-- `settings(id PK fixed 1, counting_mode text enum ['total','sessions_since_link','sessions_with_clan'], sync_interval_minutes int, backoff_until datetime nullable, last_sync_at datetime nullable, created_at/updated_at)`; defaults: counting_mode=`sessions_with_clan`, sync_interval_minutes=60.
+- `settings(id PK fixed 1, counting_mode text enum ['total','sessions_since_link','sessions_with_clan'], sync_interval_minutes int (legacy), backoff_until datetime nullable, last_sync_at datetime nullable, created_at/updated_at)`; defaults: counting_mode=`sessions_with_clan`, sync_interval_minutes=60.
 - `audits(id PK, actor_discord_id int64, action text, payload json/text, created_at/updated_at)`.
 - `guild_admin_roles(role_id PK int64, created_at/updated_at)`.
 
@@ -34,7 +34,6 @@
 - `/sync [user]`: admin-only; trigger immediate sync for all users or a specific user; audit.
 - `/set_mode mode`: admin-only; update settings.counting_mode; audit.
 - `/get_mode`: admin-only; read current counting mode.
-- `/set_interval minutes`: admin-only; update settings.sync_interval_minutes (clamped bounds); audit.
 - `/roles_add wins role`: admin-only; insert/update threshold; audit.
 - `/roles_remove [wins] [role]`: admin-only; delete threshold by wins and/or role; audit.
 - `/roles`: list thresholds ordered asc.
@@ -60,7 +59,7 @@
 - Store last_role_id; skip Discord calls if already correct to reduce rate-limit usage.
 
 ## Sync Engine
-- Background asyncio loop sleeping `settings.sync_interval_minutes`; manual `/sync` triggers immediate run; guard with lock to prevent overlap.
+- Background asyncio loop sleeping `config.sync_interval_minutes`; manual `/sync` triggers immediate run; guard with lock to prevent overlap.
 - Each run: load settings/thresholds/clan tags; fetch linked users; for each, compute wins per mode; update user row (win_count, last_role_id, last_username); apply roles idempotently; record `last_sync_at`.
 - Per-user errors logged; do not abort run. Apply global backoff using `settings.backoff_until` (currently +5 minutes) on repeated OpenFront failures.
 
@@ -88,7 +87,7 @@
 - Integration smoke in a test guild: `/link`, `/sync`, verify role assignment; change mode and rerun.
 
 ## Deployment Plan
-- Fill `config.yml` with the bot token and optional `central_database_path` and `log_level`.
+- Fill `config.yml` with the bot token and optional `central_database_path`, `log_level`, and global `sync_interval_minutes`.
 - Create bot in Discord; invite with role management permission to target guild; ensure role IDs in DB match guild roles after seeding.
 - Run bot process (systemd/docker/container); monitor logs for missing roles and sync outcomes.
-- Adjust sync interval via `/set_interval` if rate limits hit; switch modes via `/set_mode` as needed.
+- Adjust sync interval via config if rate limits hit; switch modes via `/set_mode` as needed.

@@ -12,6 +12,7 @@ def make_bot(tmp_path):
         token="dummy",
         log_level="INFO",
         central_database_path=str(tmp_path / "central.db"),
+        sync_interval_minutes=60,
     )
     bot = CountingBot(config)
     bot.guild_data_dir = tmp_path / "guild_data"

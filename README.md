@@ -33,6 +33,7 @@ Discord bot for multiple Discord servers (guilds). It links members to their Ope
    token: "DISCORD_BOT_TOKEN"
    central_database_path: "central.db"  # Registry for all guilds the bot joins
    log_level: "INFO"                    # CRITICAL | ERROR | WARNING | INFO | DEBUG
+   sync_interval_minutes: 60            # Background sync for every guild (5–1440)
    ```
    - You can set an environment variable `CONFIG_PATH=/absolute/path/to/config.yml` if the file lives elsewhere.
 
@@ -44,7 +45,7 @@ python -m src.bot
 - A small central DB is created at `central.db` (configurable) and one DB per server is created on first join under `guild_data/guild_<guild_id>.db`. Tables are created automatically; set up role thresholds via commands after the bot joins.
 - Admin roles are auto-seeded from server roles that have `Administrator` or `Manage Guild`. You can add/remove admin roles later with commands.
 - Slash commands sync automatically to every guild the bot is in.
-- The background sync runs every 60 minutes per guild by default; change it later with `/set_interval`.
+- The background sync interval is global and comes from `sync_interval_minutes` in the config (default 60 minutes for every guild).
 - `/guild_remove` deletes a guild’s data and the bot leaves; re-invite to start fresh.
 
 ## After first launch
@@ -92,7 +93,6 @@ Useful commands:
 | `/sync [user]` | Trigger immediate sync for all or a specific user | Yes |
 | `/set_mode <mode>` | Set counting mode (`total`, `sessions_since_link`, `sessions_with_clan`) | Yes |
 | `/get_mode` | Show current counting mode | Yes |
-| `/set_interval <minutes>` | Update sync interval (5–1440 minutes) | Yes |
 | `/roles_add wins:<n> role:<role>` | Insert/update a role threshold | Yes |
 | `/roles_remove [wins] [role]` | Delete thresholds by wins and/or role ID | Yes |
 | `/roles` | List configured thresholds | No |

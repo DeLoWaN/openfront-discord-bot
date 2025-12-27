@@ -203,13 +203,33 @@ class CountingBot(commands.Bot):
     async def setup_hook(self) -> None:
         await self.tree.sync()
 
+    async def _sync_commands_for_guild(self, guild: discord.Guild):
+        try:
+            await self.tree.sync(guild=guild)
+            LOGGER.info(
+                "Synced application commands for guild %s (%s)", guild.name, guild.id
+            )
+        except Exception as exc:
+            LOGGER.warning(
+                "Failed to sync commands for guild %s (%s): %s",
+                guild.name,
+                guild.id,
+                exc,
+            )
+
+    async def _sync_commands_for_all_guilds(self):
+        for guild in self.guilds:
+            await self._sync_commands_for_guild(guild)
+
     async def on_ready(self):
         LOGGER.info("Bot ready as %s", self.user)
         await self._bootstrap_guilds_on_ready()
+        await self._sync_commands_for_all_guilds()
 
     async def on_guild_join(self, guild: discord.Guild):
         LOGGER.info("New guild joined: %s (%s)", guild.name, guild.id)
         await self._ensure_guild_registered(guild)
+        await self._sync_commands_for_guild(guild)
 
     async def on_guild_remove(self, guild: discord.Guild):
         LOGGER.info("Removed from guild %s (%s); deleting data", guild.name, guild.id)
@@ -321,9 +341,8 @@ class CountingBot(commands.Bot):
                 LOGGER.exception(
                     "Background sync failed for guild %s: %s", ctx.guild_id, exc
                 )
-            settings = ctx.models.Settings.get_by_id(1)
             sleep_task = asyncio.create_task(
-                asyncio.sleep(settings.sync_interval_minutes * 60)
+                asyncio.sleep(self.config.sync_interval_minutes * 60)
             )
             event_task = asyncio.create_task(ctx.sync_event.wait())
             done, pending = await asyncio.wait(
@@ -748,30 +767,6 @@ async def setup_commands(bot: CountingBot):
         settings = ctx.models.Settings.get_by_id(1)
         await interaction.response.send_message(
             f"Current counting mode: {settings.counting_mode}", ephemeral=True
-        )
-
-    @tree.command(name="set_interval", description="Set sync interval (minutes)")
-    async def set_interval(interaction: discord.Interaction, minutes: int):
-        admin_ctx = await require_admin(interaction)
-        if not admin_ctx:
-            return
-        ctx, _member = admin_ctx
-        minutes = max(5, min(24 * 60, minutes))
-        settings = ctx.models.Settings.get_by_id(1)
-        settings.sync_interval_minutes = minutes
-        settings.save()
-        LOGGER.info(
-            "Sync interval updated guild=%s actor=%s minutes=%s",
-            ctx.guild_id,
-            user_label(interaction.user.id, interaction.user, ctx.models),
-            minutes,
-        )
-        record_audit(
-            ctx.models, interaction.user.id, "set_interval", {"minutes": minutes}
-        )
-        bot.trigger_sync(ctx)
-        await interaction.response.send_message(
-            f"Sync interval set to {minutes} minutes", ephemeral=True
         )
 
     @tree.command(name="roles_add", description="Add or update a threshold role")

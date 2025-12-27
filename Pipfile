@@ -2,11 +2,11 @@
 python_version = "3.10"
 
 [packages]
-discord = {py = "*"}
 aiohttp = "*"
 peewee = "*"
 PyYAML = "*"
 python-dotenv = "*"
+"discord.py" = "*"
 
 [dev-packages]
 ruff = "*"
