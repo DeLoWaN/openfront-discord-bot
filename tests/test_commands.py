@@ -186,9 +186,8 @@ def test_admin_role_add_response_mentions_role(tmp_path):
 
     asyncio.run(commands["admin_role_add"](interaction, role))
 
-    assert interaction.response.deferred is True
-    assert interaction.followup.message == "Added admin permission to role <@&321>"
-    assert interaction.followup.ephemeral is True
+    assert interaction.response.message == "Added admin permission to role <@&321>"
+    assert interaction.response.ephemeral is True
     assert sync_called["guild"] == guild.id
 
 
@@ -215,9 +214,8 @@ def test_admin_role_remove_response_mentions_role(tmp_path):
 
     asyncio.run(commands["admin_role_remove"](interaction, role))
 
-    assert interaction.response.deferred is True
-    assert interaction.followup.message == "Removed admin permissions from role <@&321>"
-    assert interaction.followup.ephemeral is True
+    assert interaction.response.message == "Removed admin permissions from role <@&321>"
+    assert interaction.response.ephemeral is True
     assert sync_called["guild"] == guild.id
 
 

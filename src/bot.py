@@ -1169,7 +1169,6 @@ async def setup_commands(bot: CountingBot):
         if not admin_ctx:
             return
         ctx, _member = admin_ctx
-        await interaction.response.defer(ephemeral=True, thinking=True)
         actor_label = user_label(interaction.user.id, interaction.user, ctx.models)
         ctx.models.GuildAdminRole.insert(role_id=role.id).on_conflict_ignore().execute()
         ctx.admin_role_ids = bot._load_admin_role_ids(ctx.models)
@@ -1182,8 +1181,13 @@ async def setup_commands(bot: CountingBot):
         record_audit(
             ctx.models, interaction.user.id, "admin_role_add", {"role_id": role.id}
         )
-        sync_failed = False
+        message = f"Added admin permission to role <@&{role.id}>"
+        try:
+            await interaction.response.send_message(message, ephemeral=True)
+        except Exception as exc:
+            LOGGER.warning("Failed sending response for admin_role_add: %s", exc)
         if interaction.guild:
+            sync_failed = False
             try:
                 await bot._sync_commands_for_guild(interaction.guild)
             except Exception as exc:
@@ -1193,10 +1197,14 @@ async def setup_commands(bot: CountingBot):
                     interaction.guild.id,
                     exc,
                 )
-        message = f"Added admin permission to role <@&{role.id}>"
-        if sync_failed:
-            message += " (commands will refresh soon; sync failed)"
-        await interaction.followup.send(message, ephemeral=True)
+            if sync_failed:
+                try:
+                    await interaction.followup.send(
+                        "Commands will refresh soon; sync failed.",
+                        ephemeral=True,
+                    )
+                except Exception:
+                    LOGGER.debug("Followup after sync failure suppressed.")
 
     @app_commands.default_permissions(manage_guild=True)
     @tree.command(
@@ -1208,7 +1216,6 @@ async def setup_commands(bot: CountingBot):
         if not admin_ctx:
             return
         ctx, _member = admin_ctx
-        await interaction.response.defer(ephemeral=True, thinking=True)
         actor_label = user_label(interaction.user.id, interaction.user, ctx.models)
         deleted = (
             ctx.models.GuildAdminRole.delete().where(
@@ -1226,8 +1233,16 @@ async def setup_commands(bot: CountingBot):
         record_audit(
             ctx.models, interaction.user.id, "admin_role_remove", {"role_id": role.id}
         )
-        sync_failed = False
+        message = f"Removed admin permissions from role <@&{role.id}>"
+        try:
+            await interaction.response.send_message(
+                message,
+                ephemeral=True,
+            )
+        except Exception as exc:
+            LOGGER.warning("Failed sending response for admin_role_remove: %s", exc)
         if interaction.guild:
+            sync_failed = False
             try:
                 await bot._sync_commands_for_guild(interaction.guild)
             except Exception as exc:
@@ -1237,13 +1252,14 @@ async def setup_commands(bot: CountingBot):
                     interaction.guild.id,
                     exc,
                 )
-        message = f"Removed admin permissions from role <@&{role.id}>"
-        if sync_failed:
-            message += " (commands will refresh soon; sync failed)"
-        await interaction.followup.send(
-            message,
-            ephemeral=True,
-        )
+            if sync_failed:
+                try:
+                    await interaction.followup.send(
+                        "Commands will refresh soon; sync failed.",
+                        ephemeral=True,
+                    )
+                except Exception:
+                    LOGGER.debug("Followup after sync failure suppressed.")
 
     @app_commands.default_permissions(manage_guild=True)
     @tree.command(
