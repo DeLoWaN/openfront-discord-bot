@@ -40,6 +40,9 @@ def _install_discord_stub():
     class Interaction:
         pass
 
+    class User:
+        pass
+
     # app_commands stub
     class AppCommandError(Exception):
         pass
@@ -95,6 +98,7 @@ def _install_discord_stub():
     discord.Intents = Intents
     discord.InteractionType = InteractionType
     discord.Interaction = Interaction
+    discord.abc = types.SimpleNamespace(User=User)
     discord.Member = Member
     discord.Role = Role
     discord.Guild = Guild
@@ -104,6 +108,7 @@ def _install_discord_stub():
     sys.modules["discord"] = discord
     sys.modules["discord.ext"] = discord.ext
     sys.modules["discord.ext.commands"] = commands_mod
+    sys.modules["discord.abc"] = discord.abc
     sys.modules["discord.app_commands"] = app_commands
 
 

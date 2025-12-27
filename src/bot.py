@@ -23,6 +23,7 @@ from .central_db import (
 from .config import BotConfig, load_config
 from .models import (
     GuildModels,
+    RoleThresholdExistsError,
     init_guild_db,
     record_audit,
     seed_admin_roles,
@@ -931,7 +932,11 @@ async def setup_commands(bot: CountingBot):
         if not admin_ctx:
             return
         ctx, _member = admin_ctx
-        upsert_role_threshold(ctx.models, wins, role.id)
+        try:
+            upsert_role_threshold(ctx.models, wins, role.id)
+        except RoleThresholdExistsError as exc:
+            await interaction.response.send_message(str(exc), ephemeral=True)
+            return
         LOGGER.info(
             "Role threshold saved guild=%s actor=%s wins=%s role_id=%s",
             ctx.guild_id,

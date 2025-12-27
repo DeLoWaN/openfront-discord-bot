@@ -20,6 +20,10 @@ DEFAULT_COUNTING_MODE = "sessions_with_clan"
 DEFAULT_SYNC_INTERVAL = 24 * 60
 
 
+class RoleThresholdExistsError(Exception):
+    """Raised when attempting to add a duplicate role threshold."""
+
+
 def utcnow_naive() -> datetime:
     """Return current UTC time without tzinfo for SQLite storage."""
     return datetime.now(timezone.utc).replace(tzinfo=None)
@@ -182,6 +186,20 @@ def record_audit(
 
 
 def upsert_role_threshold(models: GuildModels, wins: int, role_id: int):
+    existing_for_role = models.RoleThreshold.get_or_none(
+        models.RoleThreshold.role_id == role_id
+    )
+    if existing_for_role and existing_for_role.wins != wins:
+        raise RoleThresholdExistsError(
+            f"Role <@&{role_id}> is already assigned to the {existing_for_role.wins} wins threshold. Remove it first to reassign it."
+        )
+    existing_for_wins = models.RoleThreshold.get_or_none(
+        models.RoleThreshold.wins == wins
+    )
+    if existing_for_wins and existing_for_wins.role_id == role_id:
+        raise RoleThresholdExistsError(
+            f"A threshold for {wins} wins using role <@&{role_id}> already exists."
+        )
     models.RoleThreshold.insert(wins=wins, role_id=role_id).on_conflict(
         conflict_target=[models.RoleThreshold.wins],
         update={
