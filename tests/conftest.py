@@ -142,6 +142,9 @@ def _install_peewee_stub():
         def __eq__(self, other):
             return lambda obj: getattr(obj, self.name) == other
 
+        def desc(self):
+            return self
+
     class AutoField(Field):
         def __init__(self, *args, **kwargs):
             super().__init__(primary_key=True, *args, **kwargs)
