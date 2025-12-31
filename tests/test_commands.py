@@ -7,7 +7,7 @@ import discord
 
 from src.bot import BotConfig, CountingBot, GuildContext, setup_commands
 from src.models import init_guild_db, record_audit
-from tests.fakes import FakeGuild, FakeMember, FakeOpenFront, FakeRole
+from tests.fakes import FakeChannel, FakeGuild, FakeMember, FakeOpenFront, FakeRole
 
 
 class AdminPermissions:
@@ -86,6 +86,7 @@ def make_context(tmp_path, guild_id=999):
         models=models,
         admin_role_ids=set(),
         sync_lock=asyncio.Lock(),
+        results_lock=asyncio.Lock(),
     )
     return ctx
 
@@ -107,7 +108,7 @@ def capture_commands(tree):
 
 def stub_bot_calculations(bot, win_total=0, applied_role=None):
     async def compute_wins(*args, **kwargs):
-        return win_total
+        return win_total, None
 
     async def apply_roles(member, thresholds, win_count):
         return applied_role
@@ -446,10 +447,124 @@ def test_clan_tag_add_remove_and_list(tmp_path):
     assert interaction_remove.response.message == "Removed 1 clan tag(s) matching 'ABC'"
 
 
+def test_results_commands_update_settings(tmp_path):
+    bot = make_bot(tmp_path)
+    ctx = make_context(tmp_path)
+    bot.guild_contexts[ctx.guild_id] = ctx
+
+    commands = capture_commands(bot.tree)
+    asyncio.run(setup_commands(bot))
+
+    guild = FakeGuild(id=ctx.guild_id, roles=[], members={})
+    admin = CommandMember(user_id=1, guild=guild)
+
+    interaction_channel = CommandInteraction(guild=guild, user=admin)
+    channel = FakeChannel(id=555)
+    asyncio.run(commands["post_game_results_channel"](interaction_channel, channel))
+    settings = ctx.models.Settings.get_by_id(1)
+    assert settings.results_channel_id == 555
+
+    interaction_start = CommandInteraction(guild=guild, user=admin)
+    asyncio.run(commands["post_game_results_start"](interaction_start))
+    settings = ctx.models.Settings.get_by_id(1)
+    assert settings.results_enabled == 1
+
+    interaction_interval = CommandInteraction(guild=guild, user=admin)
+    asyncio.run(commands["post_game_results_interval"](interaction_interval, 120))
+    settings = ctx.models.Settings.get_by_id(1)
+    assert settings.results_interval_seconds == 120
+
+    interaction_stop = CommandInteraction(guild=guild, user=admin)
+    asyncio.run(commands["post_game_results_stop"](interaction_stop))
+    settings = ctx.models.Settings.get_by_id(1)
+    assert settings.results_enabled == 0
+
+
+def test_results_sync_command_runs_poll(tmp_path):
+    bot = make_bot(tmp_path)
+    ctx = make_context(tmp_path)
+    bot.guild_contexts[ctx.guild_id] = ctx
+
+    async def fake_poll(_ctx):
+        return "Results poll completed"
+
+    bot.run_results_poll = fake_poll
+
+    commands = capture_commands(bot.tree)
+    asyncio.run(setup_commands(bot))
+
+    guild = FakeGuild(id=ctx.guild_id, roles=[], members={})
+    admin = CommandMember(user_id=1, guild=guild)
+    interaction = CommandInteraction(guild=guild, user=admin)
+
+    asyncio.run(commands["post_game_results_sync"](interaction))
+
+    assert interaction.response.deferred is True
+    assert interaction.followup.message == "Results poll completed"
+
+
+def test_results_reset_window_runs_poll(tmp_path):
+    bot = make_bot(tmp_path)
+    ctx = make_context(tmp_path)
+    bot.guild_contexts[ctx.guild_id] = ctx
+    settings = ctx.models.Settings.get_by_id(1)
+    settings.results_last_poll_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    settings.save()
+    ctx.models.PostedGame.create(
+        game_id="g1",
+        game_start=datetime.now(timezone.utc).replace(tzinfo=None),
+        posted_at=datetime.now(timezone.utc).replace(tzinfo=None),
+    )
+
+    async def fake_poll(_ctx):
+        return "Results window reset"
+
+    bot.run_results_poll = fake_poll
+
+    commands = capture_commands(bot.tree)
+    asyncio.run(setup_commands(bot))
+
+    guild = FakeGuild(id=ctx.guild_id, roles=[], members={})
+    admin = CommandMember(user_id=1, guild=guild)
+    interaction = CommandInteraction(guild=guild, user=admin)
+
+    asyncio.run(commands["post_game_results_reset_window"](interaction))
+
+    settings = ctx.models.Settings.get_by_id(1)
+    assert settings.results_last_poll_at is None
+    assert ctx.models.PostedGame.select().count() == 0
+    assert interaction.response.deferred is True
+    assert interaction.followup.message == "Results window reset"
+
+
+def test_status_includes_openfront_username(tmp_path):
+    bot = make_bot(tmp_path)
+    ctx = make_context(tmp_path)
+    bot.guild_contexts[ctx.guild_id] = ctx
+    ctx.models.User.create(
+        discord_user_id=1,
+        player_id="p1",
+        linked_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        last_openfront_username="Ace",
+    )
+
+    commands = capture_commands(bot.tree)
+    asyncio.run(setup_commands(bot))
+
+    guild = FakeGuild(id=ctx.guild_id, roles=[], members={})
+    member = CommandMember(user_id=1, guild=guild)
+    interaction = CommandInteraction(guild=guild, user=member)
+
+    asyncio.run(commands["status"](interaction))
+
+    assert "Last OpenFront username: `Ace`" in interaction.response.message
+
+
 def test_link_override_sets_user(tmp_path):
     bot = make_bot(tmp_path)
     ctx = make_context(tmp_path)
     bot.guild_contexts[ctx.guild_id] = ctx
+    bot.client = FakeOpenFront()
 
     commands = capture_commands(bot.tree)
     asyncio.run(setup_commands(bot))

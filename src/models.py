@@ -38,6 +38,7 @@ class GuildModels:
     Settings: type
     Audit: type
     GuildAdminRole: type
+    PostedGame: type
 
 
 def _create_guild_models(db: SqliteDatabase) -> GuildModels:
@@ -59,6 +60,7 @@ def _create_guild_models(db: SqliteDatabase) -> GuildModels:
         last_win_count = IntegerField(default=0)
         last_role_id = IntegerField(null=True)
         last_username = CharField(null=True)
+        last_openfront_username = CharField(null=True)
         consecutive_404 = IntegerField(default=0)
         disabled = IntegerField(default=0)  # store as int for SQLite compatibility
         last_error_reason = TextField(null=True)
@@ -78,6 +80,11 @@ def _create_guild_models(db: SqliteDatabase) -> GuildModels:
         sync_interval_minutes = IntegerField()
         backoff_until = DateTimeField(null=True)
         last_sync_at = DateTimeField(null=True)
+        results_enabled = IntegerField(default=0)
+        results_channel_id = IntegerField(null=True)
+        results_interval_seconds = IntegerField(default=60)
+        results_last_poll_at = DateTimeField(null=True)
+        results_backoff_until = DateTimeField(null=True)
 
     class Audit(BaseModel):
         id = AutoField()
@@ -88,6 +95,12 @@ def _create_guild_models(db: SqliteDatabase) -> GuildModels:
     class GuildAdminRole(BaseModel):
         role_id = IntegerField(primary_key=True)
 
+    class PostedGame(BaseModel):
+        game_id = CharField(primary_key=True)
+        game_start = DateTimeField(null=True)
+        posted_at = DateTimeField()
+        winning_tags = TextField(null=True)
+
     return GuildModels(
         db=db,
         User=User,
@@ -96,6 +109,7 @@ def _create_guild_models(db: SqliteDatabase) -> GuildModels:
         Settings=Settings,
         Audit=Audit,
         GuildAdminRole=GuildAdminRole,
+        PostedGame=PostedGame,
     )
 
 
@@ -112,6 +126,7 @@ def init_guild_db(path: str, guild_id: int) -> GuildModels:
             models.Settings,
             models.Audit,
             models.GuildAdminRole,
+            models.PostedGame,
         ]
     )
 
@@ -125,6 +140,10 @@ def init_guild_db(path: str, guild_id: int) -> GuildModels:
             db.execute_sql(
                 f"ALTER TABLE {models.User._meta.table_name} ADD COLUMN last_username TEXT"
             )
+        if "last_openfront_username" not in col_names:
+            db.execute_sql(
+                f"ALTER TABLE {models.User._meta.table_name} ADD COLUMN last_openfront_username TEXT"
+            )
         if "consecutive_404" not in col_names:
             db.execute_sql(
                 f"ALTER TABLE {models.User._meta.table_name} ADD COLUMN consecutive_404 INTEGER NOT NULL DEFAULT 0"
@@ -136,6 +155,31 @@ def init_guild_db(path: str, guild_id: int) -> GuildModels:
         if "last_error_reason" not in col_names:
             db.execute_sql(
                 f"ALTER TABLE {models.User._meta.table_name} ADD COLUMN last_error_reason TEXT"
+            )
+        settings_table = models.Settings._meta.table_name
+        settings_cols = db.execute_sql(
+            f"PRAGMA table_info({settings_table});"
+        ).fetchall()
+        settings_col_names = {row[1] for row in settings_cols}
+        if "results_enabled" not in settings_col_names:
+            db.execute_sql(
+                f"ALTER TABLE {settings_table} ADD COLUMN results_enabled INTEGER NOT NULL DEFAULT 0"
+            )
+        if "results_channel_id" not in settings_col_names:
+            db.execute_sql(
+                f"ALTER TABLE {settings_table} ADD COLUMN results_channel_id INTEGER"
+            )
+        if "results_interval_seconds" not in settings_col_names:
+            db.execute_sql(
+                f"ALTER TABLE {settings_table} ADD COLUMN results_interval_seconds INTEGER NOT NULL DEFAULT 60"
+            )
+        if "results_last_poll_at" not in settings_col_names:
+            db.execute_sql(
+                f"ALTER TABLE {settings_table} ADD COLUMN results_last_poll_at DATETIME"
+            )
+        if "results_backoff_until" not in settings_col_names:
+            db.execute_sql(
+                f"ALTER TABLE {settings_table} ADD COLUMN results_backoff_until DATETIME"
             )
         # Remove legacy role_name column by recreating the table without it if present.
         rt_table = models.RoleThreshold._meta.table_name

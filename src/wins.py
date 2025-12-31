@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import re
 from datetime import datetime
-from typing import Any, Iterable, Optional, Protocol
+from typing import Any, Iterable, Optional, Protocol, Sequence
 
 from .openfront import OpenFrontClient
 
@@ -46,6 +46,23 @@ async def compute_wins_sessions_since_link(
     linked_at: datetime,
 ) -> int:
     sessions = await client.fetch_sessions(player_id)
+    return compute_wins_sessions_since_link_from_sessions(client, sessions, linked_at)
+
+
+async def compute_wins_sessions_with_clan(
+    client: OpenFrontLike,
+    player_id: str,
+    clan_tags: Iterable[str],
+) -> int:
+    sessions = list(await client.fetch_sessions(player_id))
+    return compute_wins_sessions_with_clan_from_sessions(client, sessions, clan_tags)
+
+
+def compute_wins_sessions_since_link_from_sessions(
+    client: OpenFrontLike,
+    sessions: Sequence[dict[str, Any]],
+    linked_at: datetime,
+) -> int:
     wins = 0
     for session in sessions:
         # Prefer gameStart; fall back to gameEnd if start is missing.
@@ -59,12 +76,11 @@ async def compute_wins_sessions_since_link(
     return wins
 
 
-async def compute_wins_sessions_with_clan(
+def compute_wins_sessions_with_clan_from_sessions(
     client: OpenFrontLike,
-    player_id: str,
+    sessions: Sequence[dict[str, Any]],
     clan_tags: Iterable[str],
 ) -> int:
-    sessions = list(await client.fetch_sessions(player_id))
     normalized_tags = [tag.upper() for tag in clan_tags]
     wins = 0
     for session in sessions:
@@ -86,13 +102,28 @@ async def compute_wins_sessions_with_clan(
         if client.session_win(session):
             wins += 1
     LOGGER.debug(
-        "Clan wins for %s: %s wins across %s sessions (tags=%s)",
-        player_id,
+        "Clan wins: %s wins across %s sessions (tags=%s)",
         wins,
         len(sessions),
         normalized_tags or "any",
     )
     return wins
+
+
+def last_session_username_from_sessions(
+    client: OpenFrontLike,
+    sessions: Sequence[dict[str, Any]],
+) -> Optional[str]:
+    if not sessions:
+        return None
+    sorted_sessions = sorted(
+        sessions,
+        key=lambda s: client.session_end_time(s)
+        or client.session_start_time(s)
+        or datetime.min,
+        reverse=True,
+    )
+    return sorted_sessions[0].get("username")
 
 
 async def last_session_username(client: OpenFrontLike, player_id: str) -> Optional[str]:

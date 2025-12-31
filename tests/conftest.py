@@ -43,6 +43,22 @@ def _install_discord_stub():
     class User:
         pass
 
+    class Embed:
+        def __init__(self, title=None, description=None, color=None, timestamp=None):
+            self.title = title
+            self.description = description
+            self.color = color
+            self.timestamp = timestamp
+            self.fields = []
+
+        def add_field(self, name=None, value=None, inline=False):
+            self.fields.append({"name": name, "value": value, "inline": inline})
+
+    class Color:
+        @staticmethod
+        def green():
+            return 0x00FF00
+
     class Permissions:
         def __init__(self, **flags):
             self.administrator = flags.get("administrator", False)
@@ -115,6 +131,8 @@ def _install_discord_stub():
     discord.Member = Member
     discord.Role = Role
     discord.Guild = Guild
+    discord.Embed = Embed
+    discord.Color = Color
     discord.ext = types.SimpleNamespace(commands=commands_mod)
     discord.app_commands = app_commands
 

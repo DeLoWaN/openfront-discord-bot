@@ -35,6 +35,7 @@ def make_context(tmp_path, guild_id=123):
         models=models,
         admin_role_ids=set(),
         sync_lock=asyncio.Lock(),
+        results_lock=asyncio.Lock(),
     )
     return ctx
 

@@ -2,6 +2,7 @@ import asyncio
 import random
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 import aiohttp
 
@@ -26,6 +27,13 @@ def _parse_datetime(value: str | None) -> Optional[datetime]:
         return dt
     except Exception:
         return None
+
+
+def _format_datetime(value: datetime) -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    value = value.astimezone(timezone.utc)
+    return value.isoformat().replace("+00:00", "Z")
 
 
 class OpenFrontClient:
@@ -83,6 +91,23 @@ class OpenFrontClient:
             else:
                 break
         return sessions
+
+    async def fetch_clan_sessions(
+        self, clan_tag: str, start: datetime, end: datetime
+    ) -> List[Dict[str, Any]]:
+        tag = quote(str(clan_tag))
+        start_str = _format_datetime(start)
+        end_str = _format_datetime(end)
+        path = f"/public/clan/{tag}/sessions?start={start_str}&end={end_str}"
+        payload = await self._request("GET", path)
+        if isinstance(payload, list):
+            return payload
+        if isinstance(payload, dict) and "data" in payload:
+            return list(payload.get("data") or [])
+        return []
+
+    async def fetch_game(self, game_id: str) -> Dict[str, Any]:
+        return await self._request("GET", f"/public/game/{game_id}?turns=false")
 
     async def last_session_username(self, player_id: str) -> Optional[str]:
         sessions = await self.fetch_sessions(player_id)
