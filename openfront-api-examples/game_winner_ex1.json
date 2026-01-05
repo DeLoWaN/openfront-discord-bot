@@ -1,0 +1,1611 @@
+{
+  "version": "v0.0.2",
+  "gitCommit": "793efe4dd1bada597ed201059cfe27d21660f0c2",
+  "domain": "openfront.io",
+  "subdomain": "blue",
+  "info": {
+    "gameID": "gkYxbL5C",
+    "config": {
+      "gameMap": "Gateway to the Atlantic",
+      "difficulty": "Easy",
+      "donateGold": true,
+      "donateTroops": true,
+      "gameType": "Public",
+      "gameMode": "Team",
+      "gameMapSize": "Normal",
+      "bots": 400,
+      "infiniteGold": false,
+      "infiniteTroops": false,
+      "instantBuild": false,
+      "maxPlayers": 70,
+      "disabledUnits": [],
+      "playerTeams": 7,
+      "disableNPCs": true,
+      "randomSpawn": false
+    },
+    "players": [
+      {
+        "stats": {
+          "attacks": ["7358899", "7921550"],
+          "killedAt": "6517",
+          "conquests": "10",
+          "boats": {
+            "trade": ["22", "10"],
+            "trans": ["4", "3"]
+          },
+          "gold": ["621500", "550850", "7152247"],
+          "units": {
+            "city": ["7", "0", "1", "8"],
+            "port": ["3", "0", "0", "3"],
+            "wshp": ["6", "3", "0", "5"],
+            "silo": ["0", "0", "1", "1"],
+            "defp": ["0", "2"],
+            "fact": ["0", "0", "1", "1"]
+          }
+        },
+        "clientID": "LPQk8ckF",
+        "username": "Bogogo",
+        "cosmetics": {
+          "flag": "be"
+        },
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["16201714", "17282546"],
+          "killedAt": "6620",
+          "conquests": "8",
+          "boats": {
+            "trade": ["18", "5"],
+            "trans": ["9", "7"]
+          },
+          "gold": ["631800", "565300", "2377455"],
+          "units": {
+            "city": ["4", "0", "0", "4"],
+            "port": ["1", "0", "1", "2"],
+            "fact": ["2", "0", "0", "2"],
+            "defp": ["14", "3", "0", "14"],
+            "wshp": ["1"]
+          }
+        },
+        "clientID": "dcWRsFFp",
+        "username": "Failed State",
+        "cosmetics": {
+          "flag": "lv"
+        },
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["7749142", "13066828"],
+          "killedAt": "4290",
+          "conquests": "4",
+          "gold": ["398800", "149850"],
+          "units": {
+            "city": ["1", "0", "5", "6"],
+            "defp": ["4", "1", "0", "4"]
+          }
+        },
+        "clientID": "qqkFoeyb",
+        "username": "Firefox",
+        "cosmetics": {
+          "flag": "Athens"
+        },
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["25829680", "16122362", "222904"],
+          "killedAt": "9261",
+          "conquests": "3",
+          "boats": {
+            "trans": ["10", "9"],
+            "trade": ["20", "4", "0", "1"]
+          },
+          "bombs": {
+            "hbomb": ["1", "1"]
+          },
+          "gold": ["895900", "744668", "1565260"],
+          "units": {
+            "city": ["9", "5", "4", "13"],
+            "port": ["1", "2", "1", "2"],
+            "fact": ["1", "2", "4", "5"],
+            "defp": ["6", "6", "0", "6"],
+            "wshp": ["1"],
+            "silo": ["1", "0", "0", "1"]
+          }
+        },
+        "clientID": "Nuoa4Cof",
+        "username": "CheesyDip",
+        "cosmetics": {},
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["11041089", "3618870"],
+          "conquests": "7",
+          "gold": ["977900", "381250"],
+          "units": {
+            "city": ["12", "0", "5", "10"],
+            "defp": ["3", "3", "0", "1"],
+            "fact": ["4"],
+            "saml": ["2"]
+          }
+        },
+        "clientID": "KsjYS3op",
+        "username": "[UN] VOC Train Company",
+        "clanTag": "UN",
+        "cosmetics": {
+          "flag": "nl"
+        },
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["9390750", "11178561"],
+          "killedAt": "4459",
+          "conquests": "6",
+          "boats": {
+            "trans": ["4", "4"],
+            "trade": ["8", "2"]
+          },
+          "gold": ["415700", "366300", "946953"],
+          "units": {
+            "city": ["2", "0", "0", "2"],
+            "fact": ["2", "0", "0", "2"],
+            "port": ["1", "0", "2", "3"],
+            "defp": ["2", "3", "0", "2"]
+          }
+        },
+        "clientID": "wYipgkY9",
+        "username": "viz",
+        "cosmetics": {
+          "flag": "Sicily"
+        },
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["2061747", "1524928"],
+          "killedAt": "3124",
+          "conquests": "5",
+          "boats": {
+            "trans": ["1", "1"],
+            "trade": ["4"]
+          },
+          "gold": ["282200", "299950"],
+          "units": {
+            "fact": ["1", "0", "0", "1"],
+            "city": ["1", "0", "0", "1"],
+            "port": ["1", "0", "0", "1"]
+          }
+        },
+        "clientID": "nsLqron6",
+        "username": "Neutral states",
+        "cosmetics": {
+          "flag": "Quebec"
+        },
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["14306650", "12289311"],
+          "conquests": "3",
+          "boats": {
+            "trans": ["19", "19"]
+          },
+          "bombs": {
+            "abomb": ["3", "3"]
+          },
+          "gold": ["977900", "177050"],
+          "units": {
+            "city": ["4", "2"],
+            "fact": ["11"],
+            "defp": ["0", "3"],
+            "saml": ["1"],
+            "silo": ["1"],
+            "port": ["0", "2"]
+          }
+        },
+        "clientID": "gJw6vesS",
+        "username": "Ronan",
+        "cosmetics": {},
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["10905263", "13382645"],
+          "killedAt": "5903",
+          "conquests": "7",
+          "boats": {
+            "trans": ["3", "3"],
+            "trade": ["15", "3"]
+          },
+          "bombs": {
+            "abomb": ["1", "1"]
+          },
+          "gold": ["560100", "557850", "691953"],
+          "units": {
+            "city": ["3", "1", "1", "4"],
+            "port": ["2", "0", "1", "3"],
+            "fact": ["1", "0", "0", "1"],
+            "defp": ["5", "1", "0", "5"],
+            "wshp": ["1", "1", "0", "1"],
+            "silo": ["1", "0", "0", "1"]
+          }
+        },
+        "clientID": "QAHtKXkE",
+        "username": "[WON]Darion",
+        "clanTag": "WON",
+        "cosmetics": {
+          "flag": "italy"
+        },
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["3366078", "7984855"],
+          "killedAt": "6129",
+          "conquests": "7",
+          "boats": {
+            "trans": ["1", "1"],
+            "trade": ["13", "2"]
+          },
+          "bombs": {
+            "abomb": ["2"]
+          },
+          "gold": ["582700", "404100", "2009047"],
+          "units": {
+            "city": ["3", "0", "1", "4"],
+            "port": ["2", "0", "0", "2"],
+            "defp": ["4", "0", "0", "4"],
+            "fact": ["1", "0", "0", "1"],
+            "silo": ["1", "0", "0", "1"]
+          }
+        },
+        "clientID": "ML4VvsiT",
+        "username": "Connect Structures",
+        "cosmetics": {},
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["12235339", "11788109"],
+          "killedAt": "7506",
+          "conquests": "6",
+          "boats": {
+            "trans": ["11", "9"],
+            "trade": ["15", "3"]
+          },
+          "gold": ["720400", "483850", "2059693"],
+          "units": {
+            "port": ["2", "0", "0", "2"],
+            "city": ["3", "0", "0", "3"],
+            "defp": ["0", "1"],
+            "fact": ["1", "0", "0", "1"],
+            "saml": ["1", "0", "0", "1"]
+          }
+        },
+        "clientID": "JHKSk7Vy",
+        "username": "Lidl",
+        "cosmetics": {
+          "flag": "lt"
+        },
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["15704065", "11909901", "763090"],
+          "betrayals": "1",
+          "killedAt": "7090",
+          "conquests": "3",
+          "boats": {
+            "trans": ["2", "2"],
+            "trade": ["14", "3"]
+          },
+          "gold": ["678800", "188050", "1146941"],
+          "units": {
+            "city": ["7", "0", "5", "12"],
+            "port": ["1", "0", "1", "2"],
+            "fact": ["3", "0", "3", "6"],
+            "defp": ["2", "2", "0", "2"],
+            "saml": ["1", "0", "0", "1"]
+          }
+        },
+        "clientID": "ZrbSfs2X",
+        "username": "Sharpay_IWantItAll",
+        "cosmetics": {},
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["620628"],
+          "killedAt": "889",
+          "gold": ["58700"]
+        },
+        "clientID": "iK7zoZXG",
+        "username": "Down on the West Coast",
+        "cosmetics": {
+          "flag": "armagnac"
+        },
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["3935841", "4152976"],
+          "killedAt": "4656",
+          "conquests": "5",
+          "boats": {
+            "trans": ["3", "3"],
+            "trade": ["8", "2"]
+          },
+          "gold": ["435400", "281200", "613057"],
+          "units": {
+            "city": ["2", "0", "0", "2"],
+            "port": ["2", "0", "1", "3"],
+            "fact": ["1", "0", "0", "1"]
+          }
+        },
+        "clientID": "nsKTpLyn",
+        "username": "Ta_oever",
+        "cosmetics": {
+          "flag": "aq"
+        },
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["7964157", "6495419"],
+          "killedAt": "4607",
+          "conquests": "8",
+          "boats": {
+            "trans": ["4", "4"],
+            "trade": ["6", "3", "4"]
+          },
+          "gold": ["430500", "586200", "2332232", "1128762"],
+          "units": {
+            "port": ["3", "0", "1", "4"],
+            "fact": ["1", "0", "0", "1"],
+            "city": ["4", "0", "1", "5"],
+            "defp": ["2", "0", "0", "2"],
+            "wshp": ["1"]
+          }
+        },
+        "clientID": "MRRqruy1",
+        "username": "Zoumpou",
+        "cosmetics": {},
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["7910848", "6300325", "112583"],
+          "conquests": "1",
+          "boats": {
+            "trans": ["2", "2"],
+            "trade": ["49", "26", "10"]
+          },
+          "bombs": {
+            "abomb": ["0", "0", "1"]
+          },
+          "gold": ["977900", "37700", "11993586", "3614786"],
+          "units": {
+            "city": ["4", "0", "0", "1"],
+            "port": ["9", "0", "2", "6"],
+            "defp": ["2", "0", "0", "2"],
+            "wshp": ["1"],
+            "saml": ["2", "0", "0", "1"]
+          }
+        },
+        "clientID": "FZJKR6XJ",
+        "username": "cake",
+        "cosmetics": {},
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["10550485", "15938974"],
+          "killedAt": "9442",
+          "conquests": "8",
+          "boats": {
+            "trans": ["8", "8", "0", "2"],
+            "trade": ["26", "9", "17"]
+          },
+          "gold": ["914000", "2308181", "4067532", "3056577"],
+          "units": {
+            "city": ["4", "0", "3", "7"],
+            "port": ["2", "0", "2", "4"],
+            "wshp": ["4", "6", "0", "4"],
+            "defp": ["4", "1", "0", "4"],
+            "fact": ["3", "0", "0", "3"],
+            "silo": ["2", "0", "0", "2"],
+            "saml": ["1", "0", "0", "1"]
+          }
+        },
+        "clientID": "EYXX2zmR",
+        "username": "[BD] Jimmy",
+        "clanTag": "BD",
+        "cosmetics": {},
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["2619819", "4642841"],
+          "killedAt": "6379",
+          "conquests": "3",
+          "boats": {
+            "trans": ["2", "2"],
+            "trade": ["2"]
+          },
+          "gold": ["607700", "164400"],
+          "units": {
+            "city": ["4", "0", "1", "5"],
+            "fact": ["3", "0", "1", "4"],
+            "defp": ["2", "1", "0", "2"],
+            "port": ["0", "0", "1", "1"]
+          }
+        },
+        "clientID": "xgLAB7X2",
+        "username": "House Targaryen",
+        "cosmetics": {
+          "flag": "gb-wls"
+        },
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["71573507", "51421551"],
+          "conquests": "20",
+          "boats": {
+            "trans": ["30", "30", "0", "2"],
+            "trade": ["88", "19", "18"]
+          },
+          "bombs": {
+            "hbomb": ["1", "1"]
+          },
+          "gold": ["977900", "7840510", "24877689", "7201343"],
+          "units": {
+            "city": ["11", "3", "52", "61"],
+            "port": ["3", "1", "24", "25"],
+            "defp": ["29", "18", "0", "29"],
+            "wshp": ["8", "5", "0", "4"],
+            "fact": ["0", "2", "17", "17"],
+            "silo": ["1", "0", "4", "4"],
+            "saml": ["0", "0", "7", "7"]
+          }
+        },
+        "clientID": "kNgEBx1F",
+        "username": "Send troops",
+        "cosmetics": {
+          "flag": "hk"
+        },
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["3022540", "4980661"],
+          "killedAt": "2613",
+          "conquests": "4",
+          "boats": {
+            "trans": ["1", "1"],
+            "trade": ["2"]
+          },
+          "gold": ["231100", "328000"],
+          "units": {
+            "port": ["1", "0", "0", "1"],
+            "city": ["1", "0", "0", "1"],
+            "defp": ["2", "0", "0", "2"]
+          }
+        },
+        "clientID": "QzNRjFQi",
+        "username": "Araki Empire",
+        "cosmetics": {
+          "flag": "1_Essex"
+        },
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["21985915", "12883903"],
+          "conquests": "5",
+          "boats": {
+            "trans": ["16", "15"],
+            "trade": ["28", "4"]
+          },
+          "bombs": {
+            "abomb": ["2", "1"]
+          },
+          "gold": ["977900", "426700", "2847263"],
+          "units": {
+            "port": ["4", "3", "2", "3"],
+            "city": ["3", "1", "3", "6"],
+            "defp": ["7", "5", "0", "7"],
+            "fact": ["9", "0", "2", "10"],
+            "silo": ["2", "0", "0", "2"],
+            "saml": ["2", "1", "0", "2"],
+            "wshp": ["4"]
+          }
+        },
+        "clientID": "P8wxGqip",
+        "username": "GunkNation",
+        "cosmetics": {
+          "flag": "dk"
+        },
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["14061239", "18418915"],
+          "killedAt": "5985",
+          "conquests": "13",
+          "boats": {
+            "trans": ["3", "3"],
+            "trade": ["19", "5"]
+          },
+          "gold": ["568300", "2076860", "2203821"],
+          "units": {
+            "city": ["5", "0", "6", "11"],
+            "port": ["2", "0", "0", "2"],
+            "fact": ["2", "0", "3", "5"],
+            "defp": ["1", "2", "0", "1"]
+          }
+        },
+        "clientID": "WPk3YNND",
+        "username": "From river to the sea",
+        "cosmetics": {
+          "flag": "provence"
+        },
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["859126", "867966"],
+          "killedAt": "1648",
+          "conquests": "2",
+          "boats": {
+            "trans": ["1", "1"]
+          },
+          "gold": ["134600", "81250"]
+        },
+        "clientID": "MxDEtzp7",
+        "username": "Voronobog",
+        "cosmetics": {
+          "flag": "ua"
+        },
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["3473778", "4884842"],
+          "killedAt": "3260",
+          "conquests": "2",
+          "gold": ["295800", "172650"],
+          "units": {
+            "city": ["1", "0", "0", "1"],
+            "defp": ["3", "0", "0", "3"],
+            "fact": ["1", "0", "0", "1"]
+          }
+        },
+        "clientID": "WTwmTw67",
+        "username": "[UA]",
+        "clanTag": "UA",
+        "cosmetics": {
+          "flag": "ua"
+        },
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["193505775", "69467906"],
+          "conquests": "19",
+          "boats": {
+            "trade": ["123", "32", "1"],
+            "trans": ["8", "8"]
+          },
+          "bombs": {
+            "abomb": ["0", "0", "2"],
+            "hbomb": ["0", "0", "1"]
+          },
+          "gold": ["977900", "13452064", "29296283", "141500"],
+          "units": {
+            "city": ["16", "0", "194", "40"],
+            "port": ["1", "0", "69", "15"],
+            "fact": ["1", "0", "89", "14"],
+            "defp": ["31", "65", "0", "15"],
+            "wshp": ["1"],
+            "saml": ["8", "0", "21", "7"],
+            "silo": ["0", "0", "9", "1"]
+          }
+        },
+        "clientID": "x475d65Z",
+        "username": "Andalsnes",
+        "cosmetics": {
+          "flag": "no"
+        },
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["8735199", "13456294", "117064"],
+          "killedAt": "5914",
+          "conquests": "6",
+          "boats": {
+            "trans": ["8", "8"],
+            "trade": ["11", "0", "14"]
+          },
+          "gold": ["561200", "371150", "0", "2895523"],
+          "units": {
+            "city": ["1", "0", "1", "2"],
+            "port": ["1", "0", "2", "3"],
+            "defp": ["3", "0", "0", "3"],
+            "fact": ["1", "0", "0", "1"],
+            "wshp": ["3", "3", "0", "3"]
+          }
+        },
+        "clientID": "zoC5Fbab",
+        "username": "Freedom Fighter",
+        "cosmetics": {
+          "flag": "Anarchist flag"
+        },
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["489345", "924597"],
+          "betrayals": "2",
+          "killedAt": "1436",
+          "boats": {
+            "trans": ["1", "1"]
+          },
+          "gold": ["113400"]
+        },
+        "clientID": "7oWDdhLy",
+        "username": "FRANCE",
+        "cosmetics": {},
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["4683707", "6514359"],
+          "killedAt": "4082",
+          "conquests": "4",
+          "gold": ["378000", "241350"],
+          "units": {
+            "city": ["1", "0", "0", "1"],
+            "defp": ["3", "1", "0", "3"],
+            "port": ["1", "0", "0", "1"]
+          }
+        },
+        "clientID": "tU4p2hoX",
+        "username": "palaa",
+        "cosmetics": {
+          "flag": "1_Gwynedd"
+        },
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["92791695", "62310159", "610735"],
+          "conquests": "19",
+          "boats": {
+            "trans": ["19", "17"],
+            "trade": ["73", "21"]
+          },
+          "gold": ["977900", "2510850", "14996917"],
+          "units": {
+            "port": ["3", "0", "22", "23"],
+            "city": ["22", "0", "43", "65"],
+            "defp": ["0", "31"],
+            "fact": ["3", "0", "12", "15"],
+            "saml": ["2", "0", "2", "4"],
+            "silo": ["1", "0", "1", "2"]
+          }
+        },
+        "clientID": "ALFQSmPY",
+        "username": "Darkspirit",
+        "cosmetics": {
+          "flag": "fr"
+        },
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["8186814", "10479815"],
+          "killedAt": "4518",
+          "conquests": "6",
+          "boats": {
+            "trans": ["6", "6"],
+            "trade": ["2"]
+          },
+          "gold": ["421600", "299000"],
+          "units": {
+            "city": ["2", "0", "0", "2"],
+            "port": ["1", "0", "1", "2"]
+          }
+        },
+        "clientID": "cLveicYQ",
+        "username": "EYE",
+        "cosmetics": {
+          "flag": "fr"
+        },
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["21011758", "17613263"],
+          "killedAt": "8167",
+          "conquests": "8",
+          "boats": {
+            "trans": ["4", "3"],
+            "trade": ["24", "11"]
+          },
+          "bombs": {
+            "abomb": ["4", "4"]
+          },
+          "gold": ["786500", "1032141", "8536885"],
+          "units": {
+            "city": ["4", "2", "3", "7"],
+            "port": ["1", "0", "3", "4"],
+            "fact": ["3", "0", "1", "4"],
+            "defp": ["0", "14"],
+            "silo": ["1", "0", "0", "1"],
+            "saml": ["1", "0", "1", "2"]
+          }
+        },
+        "clientID": "ptG1PoNo",
+        "username": "bubbles",
+        "cosmetics": {},
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["7766391", "2225145"],
+          "betrayals": "2",
+          "conquests": "8",
+          "boats": {
+            "trade": ["44", "23", "1", "2"],
+            "trans": ["1", "1"]
+          },
+          "bombs": {
+            "abomb": ["8", "8", "1"],
+            "hbomb": ["1", "1"]
+          },
+          "gold": ["977900", "623200", "19666649", "332633"],
+          "units": {
+            "defp": ["4", "3", "0", "2"],
+            "port": ["3", "5", "2", "2"],
+            "city": ["7", "10", "1", "5"],
+            "fact": ["3", "4", "0", "2"],
+            "silo": ["2", "5", "0", "2"],
+            "wshp": ["2", "1"],
+            "saml": ["1", "1"]
+          }
+        },
+        "clientID": "J5M1Z2sQ",
+        "username": "qqq",
+        "cosmetics": {
+          "flag": "ar"
+        },
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["8141068", "8321693"],
+          "killedAt": "4799",
+          "conquests": "5",
+          "boats": {
+            "trans": ["5", "5"]
+          },
+          "gold": ["449700", "363450"],
+          "units": {
+            "city": ["2", "0", "2", "4"],
+            "fact": ["2", "0", "4", "6"],
+            "defp": ["4", "1", "0", "4"]
+          }
+        },
+        "clientID": "dzcCZE6E",
+        "username": "SwoleBex",
+        "cosmetics": {},
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["12577888", "20998745"],
+          "conquests": "10",
+          "boats": {
+            "trans": ["12", "12"],
+            "trade": ["33", "9"]
+          },
+          "gold": ["977900", "698050", "5637127"],
+          "units": {
+            "port": ["4", "0", "4", "8"],
+            "defp": ["12", "0", "0", "12"],
+            "city": ["5", "0", "0", "5"],
+            "wshp": ["2", "1", "0", "2"],
+            "saml": ["1", "0", "0", "1"]
+          }
+        },
+        "clientID": "gmFCdfTV",
+        "username": "Spray",
+        "cosmetics": {},
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["594148", "642744"],
+          "killedAt": "2528",
+          "boats": {
+            "trade": ["2"]
+          },
+          "gold": ["222600"],
+          "units": {
+            "port": ["1", "0", "0", "1"]
+          }
+        },
+        "clientID": "xsXyiRMs",
+        "username": "JUNKWOLF",
+        "cosmetics": {
+          "flag": "Kiwi"
+        },
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["0", "470391"],
+          "killedAt": "2517",
+          "gold": ["221500"]
+        },
+        "clientID": "V3UD5JcF",
+        "username": "BootyWarriors",
+        "cosmetics": {
+          "flag": "af"
+        },
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["7490021", "6170821"],
+          "killedAt": "9273",
+          "conquests": "8",
+          "boats": {
+            "trans": ["2", "2"]
+          },
+          "gold": ["897100", "435600"],
+          "units": {
+            "city": ["7", "0", "0", "7"],
+            "fact": ["5", "0", "0", "5"],
+            "defp": ["1", "0", "0", "1"],
+            "saml": ["1", "0", "0", "1"]
+          }
+        },
+        "clientID": "vDRg5if5",
+        "username": "[STB] Andrej Babish",
+        "clanTag": "STB",
+        "cosmetics": {
+          "flag": "sk"
+        },
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["2480635", "1214373"],
+          "conquests": "3",
+          "boats": {
+            "trans": ["7", "5", "0", "6"],
+            "trade": ["35", "11", "1"]
+          },
+          "gold": ["977900", "88500", "3423309", "192199"],
+          "units": {
+            "port": ["2", "0", "0", "1"],
+            "city": ["5", "0", "0", "4"],
+            "fact": ["1", "0", "0", "1"],
+            "wshp": ["9", "6", "0", "8"],
+            "defp": ["1"]
+          }
+        },
+        "clientID": "CpyRX6i7",
+        "username": "SilverSann",
+        "cosmetics": {
+          "flag": "au"
+        },
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["11495150", "12132645", "117180"],
+          "conquests": "10",
+          "boats": {
+            "trans": ["13", "13"],
+            "trade": ["12", "2"]
+          },
+          "gold": ["977900", "803550", "20924"],
+          "units": {
+            "city": ["3", "0", "0", "3"],
+            "port": ["2", "0", "3", "5"],
+            "defp": ["1", "2", "0", "1"]
+          }
+        },
+        "clientID": "AJEtAgvD",
+        "username": "Anon193",
+        "cosmetics": {
+          "flag": "bg"
+        },
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["601464", "962878"],
+          "killedAt": "1752",
+          "conquests": "2",
+          "gold": ["145000", "74950"]
+        },
+        "clientID": "H5eJpqdi",
+        "username": "Anonymouse",
+        "cosmetics": {},
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["13886089", "20550186"],
+          "betrayals": "1",
+          "killedAt": "5963",
+          "conquests": "8",
+          "boats": {
+            "trans": ["2", "2"],
+            "trade": ["20", "9"]
+          },
+          "gold": ["566100", "519450", "3804250"],
+          "units": {
+            "city": ["4", "0", "2", "6"],
+            "port": ["3", "0", "3", "6"],
+            "defp": ["3", "1", "0", "3"],
+            "fact": ["0", "0", "1", "1"],
+            "wshp": ["1", "1", "0", "1"]
+          }
+        },
+        "clientID": "MjqtAwvy",
+        "username": "][][CRABS][][",
+        "clanTag": "CRABS",
+        "cosmetics": {
+          "flag": "Louisiana"
+        },
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["19337012", "20089368"],
+          "betrayals": "1",
+          "killedAt": "6004",
+          "conquests": "8",
+          "boats": {
+            "trade": ["23", "8"]
+          },
+          "gold": ["570200", "625850", "4265274"],
+          "units": {
+            "city": ["2", "0", "3", "5"],
+            "port": ["1", "0", "1", "2"],
+            "defp": ["9", "6", "0", "9"],
+            "fact": ["2", "0", "3", "5"],
+            "saml": ["1", "0", "0", "1"]
+          }
+        },
+        "clientID": "LXqduQmr",
+        "username": "MartiossoCZ",
+        "cosmetics": {},
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["18915948", "14678017"],
+          "killedAt": "6967",
+          "conquests": "20",
+          "boats": {
+            "trade": ["23", "4", "7"],
+            "trans": ["3", "3", "0", "1"]
+          },
+          "bombs": {
+            "abomb": ["2", "1"]
+          },
+          "gold": ["666500", "1662200", "2934492", "1768522"],
+          "units": {
+            "city": ["4", "0", "0", "4"],
+            "port": ["2", "1", "0", "2"],
+            "fact": ["2", "1", "0", "2"],
+            "defp": ["2", "3", "0", "2"],
+            "wshp": ["3", "2", "0", "2"],
+            "silo": ["1", "0", "0", "1"],
+            "saml": ["1", "0", "0", "1"]
+          }
+        },
+        "clientID": "nVQ3PyHe",
+        "username": "NOWER",
+        "cosmetics": {},
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["9604996", "13708468", "411679"],
+          "killedAt": "6394",
+          "conquests": "9",
+          "boats": {
+            "trans": ["1", "1"]
+          },
+          "gold": ["609200", "817050"],
+          "units": {
+            "city": ["3", "0", "1", "4"],
+            "fact": ["3", "0", "6", "9"],
+            "defp": ["2", "3", "0", "2"]
+          }
+        },
+        "clientID": "Wi2opSqL",
+        "username": "100 Tooth Dinosaur",
+        "cosmetics": {
+          "flag": "us"
+        },
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["5919445", "7683419"],
+          "conquests": "8",
+          "boats": {
+            "trans": ["4", "3"],
+            "trade": ["46", "11"]
+          },
+          "bombs": {
+            "abomb": ["2", "2"],
+            "hbomb": ["3", "2"]
+          },
+          "gold": ["977900", "588250", "6777134"],
+          "units": {
+            "city": ["8", "10", "0", "8"],
+            "port": ["4", "0", "0", "4"],
+            "saml": ["1", "0", "0", "1"],
+            "fact": ["2", "2", "0", "2"],
+            "silo": ["1", "0", "0", "1"]
+          }
+        },
+        "clientID": "YYDxzs8B",
+        "username": "happy 2027",
+        "cosmetics": {},
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["2604985", "3011339"],
+          "killedAt": "2314",
+          "conquests": "3",
+          "boats": {
+            "trans": ["1", "1"]
+          },
+          "gold": ["201200", "190200"],
+          "units": {
+            "city": ["1", "0", "0", "1"],
+            "fact": ["1", "0", "0", "1"]
+          }
+        },
+        "clientID": "NVUA26u6",
+        "username": "Laky",
+        "cosmetics": {},
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["12058597", "11163988"],
+          "killedAt": "6215",
+          "conquests": "12",
+          "boats": {
+            "trade": ["6", "1", "14"],
+            "trans": ["3", "0", "0", "1"]
+          },
+          "gold": ["591300", "772400", "471064", "2661882"],
+          "units": {
+            "city": ["5", "0", "2", "7"],
+            "port": ["1", "0", "2", "3"],
+            "defp": ["4", "1", "0", "4"],
+            "wshp": ["2", "1", "0", "1"],
+            "fact": ["0", "0", "1", "1"]
+          }
+        },
+        "clientID": "XiZQmXP6",
+        "username": "Sasquatch",
+        "cosmetics": {},
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["6867945", "3632270"],
+          "betrayals": "1",
+          "conquests": "4",
+          "boats": {
+            "trans": ["21", "13"],
+            "trade": ["15", "8"]
+          },
+          "gold": ["977900", "3214040", "2731656"],
+          "units": {
+            "city": ["4", "0", "1", "2"],
+            "fact": ["7", "0", "0", "2"],
+            "defp": ["2", "1", "0", "2"],
+            "port": ["2", "0", "2", "1"],
+            "wshp": ["3", "3", "0", "2"],
+            "saml": ["1"],
+            "silo": ["1"]
+          }
+        },
+        "clientID": "hXjcczDB",
+        "username": "Chocapic",
+        "cosmetics": {
+          "flag": "fr"
+        },
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["1686541", "1388246"],
+          "killedAt": "2648",
+          "gold": ["234600"],
+          "units": {
+            "city": ["1", "0", "0", "1"],
+            "defp": ["1", "0", "0", "1"]
+          }
+        },
+        "clientID": "HM6cwGYq",
+        "username": "Kai",
+        "cosmetics": {},
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["2149933", "1783736"],
+          "killedAt": "2682",
+          "conquests": "2",
+          "boats": {
+            "trans": ["1", "1"]
+          },
+          "gold": ["238000", "82200"],
+          "units": {
+            "city": ["1", "0", "0", "1"],
+            "fact": ["1", "0", "0", "1"],
+            "port": ["0", "0", "1", "1"]
+          }
+        },
+        "clientID": "2UXCkXx4",
+        "username": "Anon932",
+        "cosmetics": {},
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["6482793", "9076817"],
+          "killedAt": "3788",
+          "conquests": "13",
+          "boats": {
+            "trade": ["7"]
+          },
+          "gold": ["348600", "931850"],
+          "units": {
+            "city": ["2", "0", "1", "3"],
+            "fact": ["1", "0", "0", "1"],
+            "port": ["1", "0", "0", "1"],
+            "defp": ["5", "1", "0", "5"]
+          }
+        },
+        "clientID": "mxNwHo2i",
+        "username": "I never forget",
+        "cosmetics": {
+          "flag": "gb-eng"
+        },
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["40334605", "29492937"],
+          "conquests": "10",
+          "boats": {
+            "trans": ["8", "8"],
+            "trade": ["51", "11", "10", "1"]
+          },
+          "bombs": {
+            "abomb": ["1", "1"],
+            "hbomb": ["2", "2"]
+          },
+          "gold": ["977900", "4357490", "7767354", "2429833"],
+          "units": {
+            "city": ["5", "7", "11", "16"],
+            "port": ["4", "4", "7", "10"],
+            "fact": ["7", "1", "7", "14"],
+            "defp": ["7", "6", "0", "7"],
+            "wshp": ["6", "0", "0", "1"],
+            "saml": ["2", "0", "0", "2"],
+            "silo": ["2", "1", "1", "2"]
+          }
+        },
+        "clientID": "aLZ1d4ZB",
+        "username": "Anons Like Cock",
+        "cosmetics": {
+          "flag": "Maryland"
+        },
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["6841156", "10652033"],
+          "killedAt": "6237",
+          "conquests": "5",
+          "boats": {
+            "trans": ["11", "11", "0", "2"],
+            "trade": ["19", "5"]
+          },
+          "gold": ["593500", "283300", "3740059"],
+          "units": {
+            "city": ["1", "0", "1", "2"],
+            "port": ["1", "0", "2", "3"],
+            "defp": ["0", "1"],
+            "fact": ["1", "0", "0", "1"],
+            "wshp": ["1", "1", "0", "1"]
+          }
+        },
+        "clientID": "Bc77iKce",
+        "username": "OOO",
+        "cosmetics": {
+          "flag": "1_Airgialla",
+          "pattern": {
+            "name": "twinkle_cloud",
+            "patternData": "AIn-OAAAAAAAAAAA4OD___________-PBwAAAAAAAAAA8D4EAAAAEAAAAID_gH8AwAAAIPAP-AEDDAIGAAdggBELBIABAAB0wAAQSBAAEAAAIAMBAEGCAIBgAwATCAAIEgQAiCYQcCAAQJBABUBsgQAAAQCBBFYAxAYOAARACCTgASAc-EAgADwgCagOQcAHAOMgAAmAiggAfwCoiABIAPhAAPkDwMADQQICCgLgPwAqAhwSEKDIH__xpwpAkMABPv7__ys-AIAEBADg__-vACAAJCAAAP__vwYAASABEAD-588bABQACcABCD9_biAYA0ggBCDw_78dAAVMAgB8AWc3BwMQsBIAGMTwxx8ggICWAiAChv__MAKAmASOfAD-_4eRDwAk6MQBDP5_AIMAIEEmChDCDwwACAAJpgMAAByAwIMASOAseABAAAghBEAC4CAEAAIABCJAEgCLQAoAEDAAAZAAuACiAAVgAIiBBJALAwo4gCBAHCQCuBgAgADCF_EgEQALABAAEByHD8kBuCoAAACgiP9LBICrggcoASDcXSJA-C9CwAUAwXsSAILPAgQkFQT-kQAoQC4AAFYd8I8EMAbiFQDgX4B7JAAKEF5VgT0CjCMBIIDgV1UGEAAACQRBBPr_L4AAAEgAACAQ_g8hBABAAnAAgQACCCAAABKA5xwEEGAAgQCQAPznIIIIBggOgATgPwcBBDDwIQAkAN8ACCDAAAcAIAXsD0CAAwAogA0J8PUAAggAAACWSIDfBzgADAAB0EUC4H_gQmAACAAdEgCfAwMCAKAAUJCAcAAYOADCGACBBo4BwoUAACgQAPwgAAAcBACAAAD4DwAAAAAAAAQA4HsAAAAAAAAAAACP____________PzgAAAAAAAAAAOAA",
+            "colorPalette": {
+              "name": "faded_denin_",
+              "primaryColor": "#516294",
+              "secondaryColor": "#FDF7B4"
+            }
+          }
+        },
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["21892955", "13492238"],
+          "conquests": "6",
+          "boats": {
+            "trans": ["11", "11", "0", "2"],
+            "trade": ["46", "24", "11"]
+          },
+          "gold": ["977900", "330200", "9823902", "3598351"],
+          "units": {
+            "port": ["4", "0", "1", "5"],
+            "city": ["5", "0", "2", "5"],
+            "defp": ["5", "1", "0", "3"],
+            "fact": ["9", "0", "0", "9"],
+            "wshp": ["6", "3", "0", "2"]
+          }
+        },
+        "clientID": "R3ZZ4hQe",
+        "username": "[STER] Megarufa",
+        "clanTag": "STER",
+        "cosmetics": {
+          "flag": "sk"
+        },
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["25347215", "32346672"],
+          "killedAt": "7116",
+          "conquests": "8",
+          "boats": {
+            "trans": ["3", "3", "0", "1"],
+            "trade": ["25", "8"]
+          },
+          "gold": ["681400", "996105", "6613867"],
+          "units": {
+            "city": ["8", "0", "7", "15"],
+            "port": ["2", "0", "3", "5"],
+            "fact": ["2", "0", "2", "4"],
+            "defp": ["12", "10", "0", "12"],
+            "wshp": ["2", "2", "0", "2"]
+          }
+        },
+        "clientID": "qAX2pqR3",
+        "username": "Neji",
+        "cosmetics": {},
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["2660723", "1999870"],
+          "betrayals": "1",
+          "killedAt": "2711",
+          "gold": ["240900"],
+          "units": {
+            "city": ["1", "0", "1", "2"]
+          }
+        },
+        "clientID": "ZM4ZbAAx",
+        "username": "Trump",
+        "cosmetics": {},
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["4745995", "8514124"],
+          "killedAt": "3372",
+          "conquests": "7",
+          "boats": {
+            "trans": ["8", "8"],
+            "trade": ["5"]
+          },
+          "gold": ["307000", "523350"],
+          "units": {
+            "city": ["1", "0", "0", "1"],
+            "fact": ["1", "0", "0", "1"],
+            "defp": ["3", "0", "0", "3"],
+            "port": ["1", "0", "0", "1"]
+          }
+        },
+        "clientID": "ppnUHZft",
+        "username": "Pizzareginaa",
+        "cosmetics": {},
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["11544053", "14580585", "147887"],
+          "killedAt": "6690",
+          "conquests": "6",
+          "boats": {
+            "trans": ["15", "15", "0", "1"],
+            "trade": ["11", "3"]
+          },
+          "gold": ["638800", "411700", "830596"],
+          "units": {
+            "city": ["2", "0", "4", "6"],
+            "fact": ["3", "0", "0", "3"],
+            "defp": ["8", "1", "0", "8"],
+            "port": ["0", "0", "2", "2"],
+            "wshp": ["3", "2", "0", "2"]
+          }
+        },
+        "clientID": "ozQ7zqVK",
+        "username": "alsace",
+        "cosmetics": {},
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["0", "35059"],
+          "killedAt": "1448",
+          "gold": ["114600"]
+        },
+        "clientID": "w6A9ScpP",
+        "username": "Yamac",
+        "cosmetics": {},
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["4540283", "5094677"],
+          "betrayals": "1",
+          "killedAt": "3233",
+          "conquests": "6",
+          "boats": {
+            "trans": ["2", "2"],
+            "trade": ["4"]
+          },
+          "gold": ["293100", "347250"],
+          "units": {
+            "city": ["2", "0", "0", "2"],
+            "port": ["1", "0", "0", "1"],
+            "defp": ["1", "0", "0", "1"]
+          }
+        },
+        "clientID": "6pJsdtVb",
+        "username": "makumbos",
+        "cosmetics": {
+          "flag": "baguette"
+        },
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["7487550", "12029116"],
+          "killedAt": "4703",
+          "conquests": "9",
+          "boats": {
+            "trans": ["4", "4", "0", "3"],
+            "trade": ["7"]
+          },
+          "gold": ["440100", "529750", "198222"],
+          "units": {
+            "city": ["2", "0", "0", "2"],
+            "port": ["1", "0", "0", "1"],
+            "fact": ["0", "0", "2", "2"],
+            "defp": ["3", "0", "0", "3"],
+            "wshp": ["1"]
+          }
+        },
+        "clientID": "J13JYTRu",
+        "username": "sharingan",
+        "cosmetics": {
+          "flag": "Kingdom of Jerusalem"
+        },
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["9831235", "12472992"],
+          "killedAt": "5514",
+          "conquests": "7",
+          "boats": {
+            "trans": ["9", "9", "0", "1"],
+            "trade": ["8", "2"]
+          },
+          "gold": ["521200", "381900", "589431"],
+          "units": {
+            "city": ["3", "0", "0", "3"],
+            "fact": ["1", "0", "0", "1"],
+            "port": ["1", "0", "1", "2"],
+            "defp": ["3", "0", "0", "3"],
+            "wshp": ["1"]
+          }
+        },
+        "clientID": "ubAuEqQk",
+        "username": "AndP",
+        "cosmetics": {},
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["1882286", "3113318"],
+          "killedAt": "2413",
+          "conquests": "3",
+          "gold": ["211100", "114950"],
+          "units": {
+            "defp": ["2", "0", "0", "2"],
+            "city": ["1", "0", "0", "1"]
+          }
+        },
+        "clientID": "KFu5mLKw",
+        "username": "dhall",
+        "cosmetics": {},
+        "persistentID": null
+      },
+      {
+        "clientID": "QH3kXXBg",
+        "username": "nata",
+        "cosmetics": {},
+        "persistentID": null
+      },
+      {
+        "clientID": "ug2dTe3G",
+        "username": "kel",
+        "cosmetics": {},
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["2380777", "4495423"],
+          "killedAt": "2562",
+          "conquests": "2",
+          "gold": ["226000", "65500"],
+          "units": {
+            "city": ["1", "0", "1", "2"],
+            "defp": ["2", "0", "0", "2"]
+          }
+        },
+        "clientID": "UbXqjR1R",
+        "username": "kweepert",
+        "cosmetics": {},
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["12866568", "13632460"],
+          "conquests": "12",
+          "boats": {
+            "trans": ["5", "5"],
+            "trade": ["9", "3"]
+          },
+          "bombs": {
+            "abomb": ["3", "3"],
+            "hbomb": ["1", "1"]
+          },
+          "gold": ["977900", "710300", "872441"],
+          "units": {
+            "city": ["5", "9", "0", "5"],
+            "fact": ["4", "6", "0", "4"],
+            "defp": ["5", "5", "0", "4"],
+            "port": ["2", "1", "1", "3"],
+            "silo": ["1", "1", "0", "1"]
+          }
+        },
+        "clientID": "3rdtjTQ4",
+        "username": "Spreed Love",
+        "cosmetics": {
+          "flag": "pl"
+        },
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["11518164", "1728305"],
+          "betrayals": "2",
+          "conquests": "9",
+          "gold": ["977900", "595250"],
+          "units": {
+            "city": ["4", "0", "3", "2"],
+            "fact": ["9", "0", "1", "4"],
+            "defp": ["2", "4"],
+            "saml": ["1"]
+          }
+        },
+        "clientID": "EXE2xd5e",
+        "username": "[FR]Maxizbar",
+        "clanTag": "FR",
+        "cosmetics": {
+          "flag": "fr"
+        },
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["3351642", "3010318"],
+          "killedAt": "3413",
+          "conquests": "9",
+          "boats": {
+            "trade": ["9", "1", "3"],
+            "trans": ["0", "0", "0", "1"]
+          },
+          "gold": ["311100", "603350", "219195", "500446"],
+          "units": {
+            "city": ["2", "0", "0", "2"],
+            "port": ["2", "0", "0", "2"],
+            "wshp": ["1"],
+            "defp": ["2", "0", "0", "2"]
+          }
+        },
+        "clientID": "7rUtoXga",
+        "username": "Duty",
+        "cosmetics": {},
+        "persistentID": null
+      },
+      {
+        "stats": {
+          "attacks": ["6478308", "9698030", "70753"],
+          "killedAt": "3900",
+          "conquests": "6",
+          "boats": {
+            "trans": ["11", "10"],
+            "trade": ["5"]
+          },
+          "gold": ["359800", "309100", "197632"],
+          "units": {
+            "city": ["2", "0", "0", "2"],
+            "port": ["1", "0", "0", "1"],
+            "defp": ["4", "0", "0", "4"]
+          }
+        },
+        "clientID": "ensSLsfz",
+        "username": "ADANA",
+        "cosmetics": {
+          "flag": "tr"
+        },
+        "persistentID": null
+      }
+    ],
+    "lobbyCreatedAt": 1767567773706,
+    "start": 1767567809391,
+    "end": 1767568818811,
+    "duration": 1009,
+    "num_turns": 10082,
+    "winner": [
+      "team",
+      "Red",
+      "KsjYS3op",
+      "EXE2xd5e",
+      "gJw6vesS",
+      "FZJKR6XJ",
+      "x475d65Z",
+      "J5M1Z2sQ",
+      "hXjcczDB"
+    ],
+    "lobbyFillTime": 35685
+  }
+}

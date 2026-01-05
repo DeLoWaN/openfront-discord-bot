@@ -13,6 +13,7 @@ def make_bot(tmp_path):
         log_level="INFO",
         central_database_path=str(tmp_path / "central.db"),
         sync_interval_hours=24,
+        results_lobby_poll_seconds=2,
     )
     bot = CountingBot(config)
     bot.guild_data_dir = tmp_path / "guild_data"
@@ -35,7 +36,6 @@ def make_context(tmp_path, guild_id=123):
         models=models,
         admin_role_ids=set(),
         sync_lock=asyncio.Lock(),
-        results_lock=asyncio.Lock(),
     )
     return ctx
 

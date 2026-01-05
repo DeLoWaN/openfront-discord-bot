@@ -13,6 +13,7 @@ class BotConfig:
     log_level: str
     central_database_path: str
     sync_interval_hours: int
+    results_lobby_poll_seconds: int
 
 
 def load_config(path: str | None = None) -> BotConfig:
@@ -42,9 +43,17 @@ def load_config(path: str | None = None) -> BotConfig:
         raise ValueError("sync_interval_hours must be an integer")
     sync_interval_hours = max(1, min(24, sync_interval_hours))
 
+    lobby_interval_raw = data.get("results_lobby_poll_seconds", 2)
+    try:
+        results_lobby_poll_seconds = int(lobby_interval_raw)
+    except (TypeError, ValueError):
+        raise ValueError("results_lobby_poll_seconds must be an integer")
+    results_lobby_poll_seconds = max(1, results_lobby_poll_seconds)
+
     return BotConfig(
         token=token,
         log_level=log_level,
         central_database_path=central_database_path,
         sync_interval_hours=sync_interval_hours,
+        results_lobby_poll_seconds=results_lobby_poll_seconds,
     )

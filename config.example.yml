@@ -2,3 +2,4 @@ token: "YOUR_DISCORD_BOT_TOKEN"
 central_database_path: "central.db"
 log_level: "INFO" # Options: CRITICAL, ERROR, WARNING, INFO, DEBUG
 sync_interval_hours: 24 # Background sync cadence for all guilds (1-24 hours)
+results_lobby_poll_seconds: 2 # Poll interval for public lobby tracking (seconds)

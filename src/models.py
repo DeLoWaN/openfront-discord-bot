@@ -82,9 +82,6 @@ def _create_guild_models(db: SqliteDatabase) -> GuildModels:
         last_sync_at = DateTimeField(null=True)
         results_enabled = IntegerField(default=0)
         results_channel_id = IntegerField(null=True)
-        results_interval_seconds = IntegerField(default=60)
-        results_last_poll_at = DateTimeField(null=True)
-        results_backoff_until = DateTimeField(null=True)
 
     class Audit(BaseModel):
         id = AutoField()
@@ -168,18 +165,6 @@ def init_guild_db(path: str, guild_id: int) -> GuildModels:
         if "results_channel_id" not in settings_col_names:
             db.execute_sql(
                 f"ALTER TABLE {settings_table} ADD COLUMN results_channel_id INTEGER"
-            )
-        if "results_interval_seconds" not in settings_col_names:
-            db.execute_sql(
-                f"ALTER TABLE {settings_table} ADD COLUMN results_interval_seconds INTEGER NOT NULL DEFAULT 60"
-            )
-        if "results_last_poll_at" not in settings_col_names:
-            db.execute_sql(
-                f"ALTER TABLE {settings_table} ADD COLUMN results_last_poll_at DATETIME"
-            )
-        if "results_backoff_until" not in settings_col_names:
-            db.execute_sql(
-                f"ALTER TABLE {settings_table} ADD COLUMN results_backoff_until DATETIME"
             )
         # Remove legacy role_name column by recreating the table without it if present.
         rt_table = models.RoleThreshold._meta.table_name

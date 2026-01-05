@@ -1,11 +1,12 @@
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import List, Optional
 
 import discord
 
 from src.bot import BotConfig, CountingBot, GuildContext, setup_commands
+from src.central_db import TrackedGame
 from src.models import init_guild_db, record_audit
 from tests.fakes import FakeChannel, FakeGuild, FakeMember, FakeOpenFront, FakeRole
 
@@ -70,6 +71,7 @@ def make_bot(tmp_path):
         log_level="INFO",
         central_database_path=str(tmp_path / "central.db"),
         sync_interval_hours=24,
+        results_lobby_poll_seconds=2,
     )
     bot = CountingBot(config)
     bot.guild_data_dir = tmp_path / "guild_data"
@@ -86,7 +88,6 @@ def make_context(tmp_path, guild_id=999):
         models=models,
         admin_role_ids=set(),
         sync_lock=asyncio.Lock(),
-        results_lock=asyncio.Lock(),
     )
     return ctx
 
@@ -469,26 +470,17 @@ def test_results_commands_update_settings(tmp_path):
     settings = ctx.models.Settings.get_by_id(1)
     assert settings.results_enabled == 1
 
-    interaction_interval = CommandInteraction(guild=guild, user=admin)
-    asyncio.run(commands["post_game_results_interval"](interaction_interval, 120))
-    settings = ctx.models.Settings.get_by_id(1)
-    assert settings.results_interval_seconds == 120
-
     interaction_stop = CommandInteraction(guild=guild, user=admin)
     asyncio.run(commands["post_game_results_stop"](interaction_stop))
     settings = ctx.models.Settings.get_by_id(1)
     assert settings.results_enabled == 0
 
 
-def test_results_sync_command_runs_poll(tmp_path):
+def test_results_test_command_seeds_games(tmp_path):
     bot = make_bot(tmp_path)
     ctx = make_context(tmp_path)
     bot.guild_contexts[ctx.guild_id] = ctx
-
-    async def fake_poll(_ctx):
-        return "Results poll completed"
-
-    bot.run_results_poll = fake_poll
+    bot.client = FakeOpenFront(public_games=[{"game": "g1"}])
 
     commands = capture_commands(bot.tree)
     asyncio.run(setup_commands(bot))
@@ -497,44 +489,10 @@ def test_results_sync_command_runs_poll(tmp_path):
     admin = CommandMember(user_id=1, guild=guild)
     interaction = CommandInteraction(guild=guild, user=admin)
 
-    asyncio.run(commands["post_game_results_sync"](interaction))
+    asyncio.run(commands["post_game_results_test"](interaction))
 
     assert interaction.response.deferred is True
-    assert interaction.followup.message == "Results poll completed"
-
-
-def test_results_reset_window_runs_poll(tmp_path):
-    bot = make_bot(tmp_path)
-    ctx = make_context(tmp_path)
-    bot.guild_contexts[ctx.guild_id] = ctx
-    settings = ctx.models.Settings.get_by_id(1)
-    settings.results_last_poll_at = datetime.now(timezone.utc).replace(tzinfo=None)
-    settings.save()
-    ctx.models.PostedGame.create(
-        game_id="g1",
-        game_start=datetime.now(timezone.utc).replace(tzinfo=None),
-        posted_at=datetime.now(timezone.utc).replace(tzinfo=None),
-    )
-
-    async def fake_poll(_ctx):
-        return "Results window reset"
-
-    bot.run_results_poll = fake_poll
-
-    commands = capture_commands(bot.tree)
-    asyncio.run(setup_commands(bot))
-
-    guild = FakeGuild(id=ctx.guild_id, roles=[], members={})
-    admin = CommandMember(user_id=1, guild=guild)
-    interaction = CommandInteraction(guild=guild, user=admin)
-
-    asyncio.run(commands["post_game_results_reset_window"](interaction))
-
-    settings = ctx.models.Settings.get_by_id(1)
-    assert settings.results_last_poll_at is None
-    assert ctx.models.PostedGame.select().count() == 0
-    assert interaction.response.deferred is True
-    assert interaction.followup.message == "Results window reset"
+    assert TrackedGame.select().count() == 1
 
 
 def test_status_includes_openfront_username(tmp_path):

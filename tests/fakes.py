@@ -9,14 +9,16 @@ class FakeOpenFront:
         self,
         player_data=None,
         sessions=None,
-        clan_sessions=None,
         games=None,
+        public_games=None,
+        public_lobbies=None,
         should_fail=False,
     ):
         self.player_data = player_data or {}
         self.sessions = sessions or []
-        self.clan_sessions = clan_sessions or {}
         self.games = games or {}
+        self.public_games = public_games or []
+        self.public_lobbies = public_lobbies or []
         self.should_fail = should_fail
 
     async def fetch_player(self, player_id: str):
@@ -29,10 +31,15 @@ class FakeOpenFront:
             raise OpenFrontError("simulated failure")
         return list(self.sessions)
 
-    async def fetch_clan_sessions(self, clan_tag: str, start=None, end=None):
+    async def fetch_public_games(self, start=None, end=None, limit=1000):
         if self.should_fail:
             raise OpenFrontError("simulated failure")
-        return list(self.clan_sessions.get(clan_tag, []))
+        return list(self.public_games)
+
+    async def fetch_public_lobbies(self):
+        if self.should_fail:
+            raise OpenFrontError("simulated failure")
+        return list(self.public_lobbies)
 
     async def fetch_game(self, game_id: str):
         if self.should_fail:

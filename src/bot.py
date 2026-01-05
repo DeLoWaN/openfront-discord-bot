@@ -18,8 +18,14 @@ from .central_db import (
     get_guild_entry,
     init_central_db,
     list_active_guilds,
+    list_due_tracked_games,
+    note_tracked_game_unexpected_failure,
     register_guild,
     remove_guild,
+    remove_tracked_game,
+    reschedule_tracked_game,
+    reset_tracked_game_unexpected_failures,
+    track_game,
 )
 from .config import BotConfig, load_config
 from .models import (
@@ -47,6 +53,10 @@ logging.basicConfig(
 LOGGER = logging.getLogger(__name__)
 
 COUNTING_MODES = ["total", "sessions_since_link", "sessions_with_clan"]
+RESULTS_GAME_RETRY_SECONDS = 60
+RESULTS_TRACKED_BATCH_LIMIT = 25
+RESULTS_GAME_UNEXPECTED_FAILURE_LIMIT = 3
+RESULTS_GAME_EXPECTED_STATUSES = {404, 429, 500, 502, 503, 504}
 Threshold = Any
 
 
@@ -74,7 +84,6 @@ class GuildContext:
     models: GuildModels
     admin_role_ids: Set[int]
     sync_lock: asyncio.Lock
-    results_lock: asyncio.Lock
 
 
 async def determine_target_role(
@@ -121,25 +130,93 @@ def build_openfront_username_index(models: GuildModels) -> Dict[str, List[int]]:
     return index
 
 
+def extract_game_id(entry: Dict[str, Any]) -> Optional[str]:
+    for key in ("game", "gameId", "gameID", "id"):
+        value = entry.get(key)
+        if value:
+            return str(value)
+    return None
+
+
+def extract_lobby_game_id(entry: Dict[str, Any]) -> Optional[str]:
+    for key in ("gameID", "gameId", "game", "id"):
+        value = entry.get(key)
+        if value:
+            return str(value)
+    return None
+
+
+def parse_iso_datetime(value: Any) -> Optional[datetime]:
+    if not isinstance(value, str):
+        return None
+    try:
+        if value.endswith("Z"):
+            value = value[:-1] + "+00:00"
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo:
+            parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        return parsed
+    except Exception:
+        return None
+
+
+def extract_winner_client_ids(
+    info: Dict[str, Any], players: Iterable[Dict[str, Any]]
+) -> Set[str]:
+    winners_raw = info.get("winner")
+    if not isinstance(winners_raw, list):
+        return set()
+    player_ids = {
+        str(player.get("clientID")) for player in players if player.get("clientID")
+    }
+    return {str(item) for item in winners_raw if str(item) in player_ids}
+
+
+def resolve_winning_clan_tags(
+    winner_client_ids: Set[str], players: Iterable[Dict[str, Any]]
+) -> Set[str]:
+    tags = set()
+    for player in players:
+        client_id = player.get("clientID")
+        if not client_id or str(client_id) not in winner_client_ids:
+            continue
+        tag = player.get("clanTag")
+        if tag:
+            tags.add(str(tag).upper())
+    return tags
+
+
+def parse_players_per_team(player_teams: Any) -> Optional[float]:
+    if player_teams is None:
+        return None
+    if isinstance(player_teams, (int, float)):
+        return None
+    label = str(player_teams).strip().lower()
+    if label == "":
+        return None
+    named_sizes = {"duos": 2, "trios": 3, "quads": 4}
+    if label in named_sizes:
+        return float(named_sizes[label])
+    return None
+
+
 def _compute_players_per_team(
     num_teams: Any, player_teams: Any, total_players: Any
 ) -> Optional[float]:
-    if player_teams is None or num_teams is None:
+    if player_teams is None:
         return None
     if isinstance(player_teams, (int, float)):
-        if total_players and isinstance(num_teams, (int, float)):
-            if int(player_teams) == int(num_teams) and num_teams != 0:
-                return float(total_players) / float(num_teams)
-        return float(player_teams)
+        if total_players and int(player_teams) != 0:
+            return float(total_players) / float(player_teams)
+        return None
     label = str(player_teams).strip().lower()
     named_sizes = {"duos": 2, "trios": 3, "quads": 4}
     if label in named_sizes:
         return float(named_sizes[label])
     if label.isdigit():
-        if total_players and isinstance(num_teams, (int, float)):
-            if int(label) == int(num_teams) and num_teams != 0:
-                return float(total_players) / float(num_teams)
-        return float(label)
+        if total_players and int(label) != 0:
+            return float(total_players) / float(label)
+        return None
     return None
 
 
@@ -148,25 +225,28 @@ def format_team_mode(
 ) -> str:
     if num_teams is None or player_teams is None:
         return "Unknown mode"
-    teams_label = str(num_teams)
-    player_label = str(player_teams).strip()
-    if player_label.isdigit():
-        players_per_team = _compute_players_per_team(
-            num_teams, player_teams, total_players
-        )
-        if players_per_team is not None:
-            display = str(int(players_per_team))
-            return f"{teams_label} teams ({display} players per team)"
-        return f"{teams_label} teams ({player_label} players per team)"
-    if player_label == "":
+    players_per_team = _compute_players_per_team(num_teams, player_teams, total_players)
+    if players_per_team is None:
         return "Unknown mode"
-    return f"{teams_label} teams ({player_label})"
+    teams_label = str(num_teams)
+    display = (
+        str(int(players_per_team))
+        if float(players_per_team).is_integer()
+        else str(players_per_team)
+    )
+    label = str(player_teams).strip()
+    base = f"{teams_label} teams of {display} players"
+    if label and not label.isdigit():
+        return f"{base} ({label})"
+    return base
 
 
 def resolve_game_start(
-    client: OpenFrontClient, session: Dict[str, Any], game_info: Dict[str, Any]
+    client: OpenFrontClient,
+    session: Optional[Dict[str, Any]],
+    game_info: Dict[str, Any],
 ) -> Optional[datetime]:
-    start_time = client.session_start_time(session)
+    start_time = client.session_start_time(session) if session else None
     if start_time:
         return start_time
     info_start = game_info.get("start")
@@ -286,14 +366,14 @@ class CountingBot(commands.Bot):
         init_central_db(config.central_database_path)
         self.sync_queue: asyncio.Queue[int] = asyncio.Queue()
         self.role_queue: asyncio.Queue[Any] = asyncio.Queue()
-        self.results_queue: asyncio.Queue[int] = asyncio.Queue()
         self.sync_worker_tasks: list[asyncio.Task[None]] = []
         self.role_worker_task: asyncio.Task[None] | None = None
         self.scheduler_task: asyncio.Task[None] | None = None
         self.results_worker_tasks: list[asyncio.Task[None]] = []
-        self.results_scheduler_task: asyncio.Task[None] | None = None
+        self.results_lobby_task: asyncio.Task[None] | None = None
         self.audit_cleanup_task: asyncio.Task[None] | None = None
-        self.results_in_flight: Set[int] = set()
+        self.results_processing_lock = asyncio.Lock()
+        self.results_wake_event = asyncio.Event()
 
     def guild_db_path(self, guild_id: int) -> str:
         return str(self.guild_data_dir / f"guild_{guild_id}.db")
@@ -304,8 +384,8 @@ class CountingBot(commands.Bot):
     async def close(self) -> None:
         if self.scheduler_task:
             self.scheduler_task.cancel()
-        if self.results_scheduler_task:
-            self.results_scheduler_task.cancel()
+        if self.results_lobby_task:
+            self.results_lobby_task.cancel()
         if self.audit_cleanup_task:
             self.audit_cleanup_task.cancel()
         if self.role_worker_task:
@@ -334,9 +414,9 @@ class CountingBot(commands.Bot):
                 await self.scheduler_task
             except asyncio.CancelledError:
                 pass
-        if self.results_scheduler_task:
+        if self.results_lobby_task:
             try:
-                await self.results_scheduler_task
+                await self.results_lobby_task
             except asyncio.CancelledError:
                 pass
         if self.audit_cleanup_task:
@@ -366,9 +446,7 @@ class CountingBot(commands.Bot):
             for _ in range(self.MAX_CONCURRENT_RESULTS_POLLS)
         ]
         self.scheduler_task = self.loop.create_task(self._scheduler_loop())
-        self.results_scheduler_task = self.loop.create_task(
-            self._results_scheduler_loop()
-        )
+        self.results_lobby_task = self.loop.create_task(self._results_lobby_loop())
         self.audit_cleanup_task = self.loop.create_task(self._audit_cleanup_loop())
 
     async def _sync_commands_for_guild(self, guild: discord.Guild):
@@ -465,7 +543,6 @@ class CountingBot(commands.Bot):
             models=models,
             admin_role_ids=admin_role_ids,
             sync_lock=asyncio.Lock(),
-            results_lock=asyncio.Lock(),
         )
         self.guild_contexts[guild.id] = ctx
         return ctx
@@ -521,55 +598,73 @@ class CountingBot(commands.Bot):
             except Exception as exc:
                 LOGGER.exception("Sync worker failed for guild %s: %s", guild_id, exc)
 
-    async def _results_scheduler_loop(self):
+    async def _results_lobby_loop(self):
         await self.wait_until_ready()
         while not self.is_closed():
-            now = utcnow_naive()
-            for ctx in list(self.guild_contexts.values()):
-                try:
-                    settings = ctx.models.Settings.get_by_id(1)
-                except Exception as exc:
+            interval = max(1, int(self.config.results_lobby_poll_seconds or 2))
+            try:
+                lobbies = await self.client.fetch_public_lobbies()
+            except OpenFrontError as exc:
+                delay = interval
+                if exc.status == 429 and exc.retry_after:
+                    delay = max(delay, exc.retry_after)
                     LOGGER.warning(
-                        "Results scheduler failed loading settings for guild %s: %s",
-                        ctx.guild_id,
-                        exc,
+                        "Lobby poll rate limited; backing off for %ss", delay
                     )
-                    continue
-                if not settings.results_enabled:
-                    continue
-                if not settings.results_channel_id:
-                    continue
-                if (
-                    settings.results_backoff_until
-                    and settings.results_backoff_until > now
-                ):
-                    continue
-                interval = int(settings.results_interval_seconds or 60)
-                if interval < 60:
-                    interval = 60
-                last_poll = settings.results_last_poll_at
-                due = last_poll is None or (
-                    (now - last_poll).total_seconds() >= interval
+                else:
+                    LOGGER.warning("Lobby poll failed: %s", exc)
+                await asyncio.sleep(delay)
+                continue
+
+            try:
+                self._record_public_lobbies(lobbies)
+            except Exception as exc:
+                LOGGER.exception("Lobby tracking failed: %s", exc)
+                await asyncio.sleep(interval)
+                continue
+            await asyncio.sleep(interval)
+
+    def _record_public_lobbies(self, lobbies: Iterable[Dict[str, Any]]) -> int:
+        now = utcnow_naive()
+        next_attempt_at = now + timedelta(seconds=RESULTS_GAME_RETRY_SECONDS)
+        added = 0
+        for entry in lobbies:
+            if not isinstance(entry, dict):
+                continue
+            game_id = extract_lobby_game_id(entry)
+            if not game_id:
+                continue
+            if track_game(game_id, next_attempt_at=next_attempt_at):
+                LOGGER.info(
+                    "Discovered new tracked game %s from public lobbies", game_id
                 )
-                if due and ctx.guild_id not in self.results_in_flight:
-                    self.results_in_flight.add(ctx.guild_id)
-                    await self.results_queue.put(ctx.guild_id)
-            await asyncio.sleep(5)
+                added += 1
+        if added:
+            self.results_wake_event.set()
+        return added
 
     async def _results_worker(self):
         await self.wait_until_ready()
         while not self.is_closed():
-            guild_id = await self.results_queue.get()
-            ctx = self.get_guild_context(guild_id)
-            if not ctx:
-                self.results_in_flight.discard(guild_id)
+            if self.results_processing_lock.locked():
+                await asyncio.sleep(0.5)
                 continue
-            try:
-                await self.run_results_poll(ctx)
-            except Exception as exc:
-                LOGGER.exception("Results poll failed for guild %s: %s", guild_id, exc)
-            finally:
-                self.results_in_flight.discard(guild_id)
+            async with self.results_processing_lock:
+                try:
+                    (
+                        _posted,
+                        _failures,
+                        processed,
+                    ) = await self._process_due_tracked_games()
+                except Exception as exc:
+                    processed = 0
+                    LOGGER.exception("Results worker failed: %s", exc)
+            if processed == 0:
+                try:
+                    await asyncio.wait_for(self.results_wake_event.wait(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    pass
+                self.results_wake_event.clear()
 
     async def _role_worker(self):
         await self.wait_until_ready()
@@ -625,256 +720,346 @@ class CountingBot(commands.Bot):
                     )
             await asyncio.sleep(24 * 60 * 60)
 
-    async def run_results_poll(self, ctx: GuildContext) -> str:
-        if ctx.results_lock.locked():
-            return "Results poll already running"
-        async with ctx.results_lock:
-            guild = self.get_guild(ctx.guild_id)
-            if not guild:
-                return "Guild unavailable"
-
-            settings = ctx.models.Settings.get_by_id(1)
-            if not settings.results_enabled:
-                return "Results disabled"
-            if not settings.results_channel_id:
-                return "Results channel not set"
-
-            channel = guild.get_channel(settings.results_channel_id)
-            if not channel:
-                LOGGER.warning(
-                    "Results channel %s not found for guild %s",
-                    settings.results_channel_id,
-                    ctx.guild_id,
-                )
-                return "Results channel not found"
-
-            now = utcnow_naive()
-            if settings.results_backoff_until and settings.results_backoff_until > now:
-                msg = f"In results backoff until {settings.results_backoff_until.isoformat()}"
-                LOGGER.warning(
-                    "Skipping results poll for guild %s: %s",
-                    ctx.guild_id,
-                    settings.results_backoff_until,
-                )
-                return msg
-
-            clan_tags = [ct.tag_text for ct in ctx.models.ClanTag.select()]
-            if not clan_tags:
-                return "No clan tags configured"
-
-            if settings.results_last_poll_at is None:
-                start = now - timedelta(hours=1)
-            else:
-                start = now - timedelta(hours=2)
-            end = now
-
-            games: Dict[str, Dict[str, Any]] = {}
-            openfront_failure = False
-            for tag in clan_tags:
-                try:
-                    sessions = await self.client.fetch_clan_sessions(tag, start, end)
-                except OpenFrontError as exc:
-                    openfront_failure = True
-                    LOGGER.warning(
-                        "Clan sessions fetch failed for tag %s in guild %s: %s",
-                        tag,
-                        ctx.guild_id,
-                        exc,
-                    )
-                    continue
-                for session in sessions:
-                    if not session.get("hasWon"):
-                        continue
-                    game_id = session.get("gameId")
-                    if not game_id:
-                        continue
-                    entry = games.setdefault(
-                        game_id,
-                        {
-                            "winning_tags": set(),
-                            "game_start": None,
-                            "num_teams": None,
-                            "player_teams": None,
-                            "total_player_count": None,
-                            "session": session,
-                        },
-                    )
-                    session_tag = session.get("clanTag") or tag
-                    if session_tag:
-                        entry["winning_tags"].add(str(session_tag).upper())
-                    if entry["game_start"] is None:
-                        entry["game_start"] = self.client.session_start_time(session)
-                    if (
-                        entry["num_teams"] is None
-                        and session.get("numTeams") is not None
-                    ):
-                        entry["num_teams"] = session.get("numTeams")
-                    if (
-                        entry["player_teams"] is None
-                        and session.get("playerTeams") is not None
-                    ):
-                        entry["player_teams"] = session.get("playerTeams")
-                    if (
-                        entry["total_player_count"] is None
-                        and session.get("totalPlayerCount") is not None
-                    ):
-                        entry["total_player_count"] = session.get("totalPlayerCount")
-
-            if not games:
-                if openfront_failure:
-                    settings.results_backoff_until = utcnow_naive() + timedelta(
-                        minutes=5
-                    )
-                else:
-                    settings.results_backoff_until = None
-                settings.results_last_poll_at = now
-                settings.save()
-                return "No wins found"
-
-            username_index = build_openfront_username_index(ctx.models)
-            posted = 0
-            failures = 0
-            sorted_games = sorted(
-                games.items(),
-                key=lambda item: item[1]["game_start"] or datetime.min,
+    async def _process_due_tracked_games(
+        self, summary_guild_id: int | None = None
+    ) -> tuple[int, int, int]:
+        now = utcnow_naive()
+        due_games = list_due_tracked_games(now, limit=RESULTS_TRACKED_BATCH_LIMIT)
+        if not due_games:
+            return 0, 0, 0
+        posted_total = 0
+        failures_total = 0
+        for entry in due_games:
+            posted, failures, _retry = await self._process_tracked_game(
+                entry.game_id, summary_guild_id=summary_guild_id
             )
-            for game_id, entry in sorted_games:
-                if ctx.models.PostedGame.get_or_none(
-                    ctx.models.PostedGame.game_id == game_id
-                ):
-                    continue
-                try:
-                    payload = await self.client.fetch_game(game_id)
-                except OpenFrontError as exc:
-                    openfront_failure = True
-                    failures += 1
+            posted_total += posted
+            failures_total += failures
+        return posted_total, failures_total, len(due_games)
+
+    async def _process_tracked_game(
+        self, game_id: str, summary_guild_id: int | None = None
+    ) -> tuple[int, int, bool]:
+        now = utcnow_naive()
+        if not self.guild_contexts:
+            reschedule_tracked_game(
+                game_id, now + timedelta(seconds=RESULTS_GAME_RETRY_SECONDS)
+            )
+            return 0, 0, True
+        try:
+            payload = await self.client.fetch_game(game_id)
+        except OpenFrontError as exc:
+            retry_seconds = RESULTS_GAME_RETRY_SECONDS
+            if exc.status == 429 and exc.retry_after:
+                retry_seconds = max(int(exc.retry_after), 1)
+            is_unexpected = (
+                exc.status is not None
+                and exc.status not in RESULTS_GAME_EXPECTED_STATUSES
+            )
+            if is_unexpected:
+                marked_failed = note_tracked_game_unexpected_failure(
+                    game_id, now, RESULTS_GAME_UNEXPECTED_FAILURE_LIMIT
+                )
+                if marked_failed:
                     LOGGER.warning(
-                        "Game fetch failed for %s in guild %s: %s",
+                        "Game fetch failed for %s: %s (marked failed after %s unexpected errors)",
                         game_id,
-                        ctx.guild_id,
                         exc,
+                        RESULTS_GAME_UNEXPECTED_FAILURE_LIMIT,
                     )
-                    continue
-                info = payload.get("info", {}) if isinstance(payload, dict) else {}
-                config = info.get("config", {}) if isinstance(info, dict) else {}
-                players = info.get("players", []) if isinstance(info, dict) else []
-
-                winning_tags = entry["winning_tags"]
-                winners_lines: list[str] = []
-                winners_tagged_count = 0
-                opponent_players: Dict[str, list[str]] = {}
-                for player in players:
-                    tag = player.get("clanTag")
-                    if not tag:
-                        continue
-                    tag_upper = str(tag).upper()
-                    username = player.get("username") or "Unknown"
-                    if tag_upper in winning_tags:
-                        winners_tagged_count += 1
-                        matches = username_index.get(username, [])
-                        if len(matches) == 1:
-                            display = f"<@{matches[0]}>"
-                        else:
-                            display = username
-                        winners_lines.append(f"🎉 {display}")
-                    else:
-                        matches = username_index.get(username, [])
-                        if len(matches) == 1:
-                            display = f"<@{matches[0]}>"
-                        else:
-                            display = username
-                        opponent_players.setdefault(tag_upper, []).append(display)
-                team_size_value = _compute_players_per_team(
-                    entry.get("num_teams"),
-                    entry.get("player_teams"),
-                    entry.get("total_player_count"),
-                )
-                if team_size_value and winners_tagged_count > 0:
-                    others_count = max(int(team_size_value) - winners_tagged_count, 0)
-                    if others_count > 0:
-                        suffix = "player" if others_count == 1 else "players"
-                        winners_lines.append(f"*+{others_count} other {suffix}*")
-
-                opponent_lines = []
-                for tag, names in sorted(
-                    opponent_players.items(),
-                    key=lambda item: (-len(item[1]), item[0]),
-                ):
-                    count = len(names)
-                    suffix = "player" if count == 1 else "players"
-                    names_label = ", ".join(names)
-                    opponent_lines.append(f"⚔️ {tag}: {count} {suffix} ({names_label})")
-
-                map_name = config.get("gameMap") or "Unknown"
-                mode_text = format_team_mode(
-                    entry["num_teams"],
-                    entry["player_teams"],
-                    entry.get("total_player_count"),
-                )
-                replay_link = f"https://openfront.io/#join={game_id}"
-                game_start = resolve_game_start(self.client, entry["session"], info)
-                game_end = resolve_game_end(info)
-                duration_seconds = None
-                if isinstance(info.get("duration"), (int, float)):
-                    duration_seconds = int(info.get("duration"))
-                elif game_start and game_end:
-                    duration_seconds = int((game_end - game_start).total_seconds())
-                tag_label = " / ".join(sorted(winning_tags)) if winning_tags else "Clan"
-                ended_at_line = "Finished: unknown"
-                if game_end:
-                    ended_at_line = f"Finished: <t:{int(game_end.replace(tzinfo=timezone.utc).timestamp())}:F>"
-                duration_label = format_duration_seconds(duration_seconds)
-                embed = discord.Embed(
-                    title=f"🏆 Victory for {tag_label}!",
-                    description=(
-                        f"Map: **{map_name}**\n"
-                        f"Mode: **{mode_text}**\n"
-                        f"{ended_at_line} ({duration_label})\n"
-                        f"Replay: {replay_link}"
-                    ),
-                    color=discord.Color.green(),
-                )
-                embed.add_field(
-                    name="Winners",
-                    value="\n".join(winners_lines) if winners_lines else "Unknown",
-                    inline=False,
-                )
-                embed.add_field(
-                    name="Opponents",
-                    value="\n".join(opponent_lines) if opponent_lines else "None",
-                    inline=False,
-                )
-                try:
-                    await channel.send(embed=embed)
-                except Exception as exc:
-                    failures += 1
                     LOGGER.warning(
-                        "Failed posting results for %s in guild %s: %s",
+                        "Skipping future results polls for %s after unexpected failures",
                         game_id,
-                        ctx.guild_id,
-                        exc,
                     )
-                    continue
-
-                ctx.models.PostedGame.create(
-                    game_id=game_id,
-                    game_start=game_start,
-                    posted_at=utcnow_naive(),
-                    winning_tags=json.dumps(sorted(winning_tags))
-                    if winning_tags
-                    else None,
-                )
-                posted += 1
-
-            if openfront_failure:
-                settings.results_backoff_until = utcnow_naive() + timedelta(minutes=5)
+                    failures = 1 if summary_guild_id is not None else 0
+                    return 0, failures, False
             else:
-                settings.results_backoff_until = None
-            settings.results_last_poll_at = now
-            settings.save()
-            summary = f"Posted {posted} games, failures: {failures}"
-            LOGGER.info("Results poll guild=%s summary=%s", ctx.guild_id, summary)
-            return summary
+                reset_tracked_game_unexpected_failures(game_id)
+            reschedule_tracked_game(game_id, now + timedelta(seconds=retry_seconds))
+            if exc.status != 404:
+                LOGGER.warning("Game fetch failed for %s: %s", game_id, exc)
+            failures = 1 if summary_guild_id is not None else 0
+            return 0, failures, True
+
+        if not isinstance(payload, dict):
+            LOGGER.warning("Game payload invalid for %s: %s", game_id, payload)
+            remove_tracked_game(game_id)
+            LOGGER.info("Removed tracked game %s from central DB", game_id)
+            return 0, 0, False
+
+        reset_tracked_game_unexpected_failures(game_id)
+
+        posted = 0
+        failures = 0
+        retry_needed = False
+        for ctx in list(self.guild_contexts.values()):
+            posted_game, failed = await self._post_game_results_for_guild(
+                ctx, game_id, payload
+            )
+            if summary_guild_id is None or ctx.guild_id == summary_guild_id:
+                if posted_game:
+                    posted += 1
+                if failed:
+                    failures += 1
+            if failed:
+                retry_needed = True
+
+        if retry_needed:
+            reschedule_tracked_game(
+                game_id, now + timedelta(seconds=RESULTS_GAME_RETRY_SECONDS)
+            )
+        else:
+            remove_tracked_game(game_id)
+            LOGGER.info("Removed tracked game %s from central DB", game_id)
+        return posted, failures, retry_needed
+
+    async def _post_game_results_for_guild(
+        self, ctx: GuildContext, game_id: str, payload: Dict[str, Any]
+    ) -> tuple[bool, bool]:
+        guild = self.get_guild(ctx.guild_id)
+        if not guild:
+            return False, False
+
+        settings = ctx.models.Settings.get_by_id(1)
+        if not settings.results_enabled:
+            return False, False
+        if not settings.results_channel_id:
+            return False, False
+
+        channel = guild.get_channel(settings.results_channel_id)
+        if not channel:
+            LOGGER.warning(
+                "Results channel %s not found for guild %s",
+                settings.results_channel_id,
+                ctx.guild_id,
+            )
+            return False, False
+
+        if ctx.models.PostedGame.get_or_none(ctx.models.PostedGame.game_id == game_id):
+            return False, False
+
+        clan_tags = [ct.tag_text for ct in ctx.models.ClanTag.select()]
+        if not clan_tags:
+            return False, False
+        normalized_tags = {str(tag).upper() for tag in clan_tags if tag}
+        username_index = build_openfront_username_index(ctx.models)
+
+        info = payload.get("info", {}) if isinstance(payload, dict) else {}
+        if not isinstance(info, dict):
+            return False, False
+        config = info.get("config", {}) if isinstance(info, dict) else {}
+        if not isinstance(config, dict):
+            config = {}
+        players = info.get("players", []) if isinstance(info, dict) else []
+        if not isinstance(players, list):
+            players = []
+
+        game_mode = config.get("gameMode") or info.get("gameMode") or "Unknown mode"
+        game_mode_label = str(game_mode)
+        is_ffa = game_mode_label.strip().lower() == "free for all"
+        num_teams = info.get("numTeams") or config.get("numTeams")
+        player_teams = info.get("playerTeams") or config.get("playerTeams")
+        total_player_count = info.get("totalPlayerCount")
+        max_players = config.get("maxPlayers")
+        if total_player_count is None and isinstance(max_players, (int, float)):
+            total_player_count = max_players
+        if num_teams is None and player_teams is not None:
+            if isinstance(player_teams, (int, float)):
+                num_teams = int(player_teams)
+            else:
+                label = str(player_teams).strip()
+                if label.isdigit():
+                    num_teams = int(label)
+        if num_teams is None and total_player_count and player_teams is not None:
+            players_per_team = parse_players_per_team(player_teams)
+            if players_per_team and float(players_per_team).is_integer():
+                if isinstance(total_player_count, (int, float)):
+                    if total_player_count % players_per_team == 0:
+                        num_teams = int(total_player_count / players_per_team)
+
+        winner_client_ids = extract_winner_client_ids(info, players)
+        if not winner_client_ids:
+            return False, False
+        winning_tags_all: Set[str] = set()
+        winning_tags_configured: Set[str] = set()
+        winners_lines: list[str] = []
+        winners_tagged_count = 0
+        opponent_players: Dict[str, list[str]] = {}
+        if is_ffa:
+            winning_tags_all = resolve_winning_clan_tags(winner_client_ids, players)
+            winning_tags_configured = winning_tags_all & normalized_tags
+            if not winning_tags_configured:
+                return False, False
+            for player in players:
+                client_id = player.get("clientID")
+                if not client_id:
+                    continue
+                username = player.get("username") or "Unknown"
+                matches = username_index.get(username, [])
+                if len(matches) == 1:
+                    display = f"<@{matches[0]}>"
+                else:
+                    display = username
+                if str(client_id) in winner_client_ids:
+                    winners_lines.append(f"🎉 {display}")
+                    winners_tagged_count += 1
+                    continue
+                tag = player.get("clanTag")
+                if not tag:
+                    continue
+                tag_upper = str(tag).upper()
+                if tag_upper in winning_tags_all:
+                    continue
+                opponent_players.setdefault(tag_upper, []).append(display)
+        else:
+            winning_tags_all = resolve_winning_clan_tags(winner_client_ids, players)
+            winning_tags_configured = winning_tags_all & normalized_tags
+            if not winning_tags_configured:
+                return False, False
+            for player in players:
+                tag = player.get("clanTag")
+                if not tag:
+                    continue
+                tag_upper = str(tag).upper()
+                username = player.get("username") or "Unknown"
+                matches = username_index.get(username, [])
+                if len(matches) == 1:
+                    display = f"<@{matches[0]}>"
+                else:
+                    display = username
+                if tag_upper in winning_tags_configured:
+                    winners_tagged_count += 1
+                    is_winner = str(player.get("clientID")) in winner_client_ids
+                    suffix = "" if is_winner else " - 💀 *died early*"
+                    winners_lines.append(f"🎉 {display}{suffix}")
+                elif tag_upper not in winning_tags_all:
+                    opponent_players.setdefault(tag_upper, []).append(display)
+
+            players_per_team = _compute_players_per_team(
+                num_teams, player_teams, total_player_count
+            )
+            if players_per_team is None:
+                players_per_team = parse_players_per_team(player_teams)
+            if players_per_team and winners_tagged_count > 0:
+                others_count = max(int(players_per_team) - winners_tagged_count, 0)
+                if others_count > 0:
+                    suffix = "player" if others_count == 1 else "players"
+                    winners_lines.append(f"*+{others_count} other {suffix}*")
+
+        opponent_lines = []
+        for tag, names in sorted(
+            opponent_players.items(),
+            key=lambda item: (-len(item[1]), item[0]),
+        ):
+            count = len(names)
+            suffix = "player" if count == 1 else "players"
+            names_label = ", ".join(names)
+            opponent_lines.append(f"⚔️ {tag}: {count} {suffix} ({names_label})")
+
+        map_name = config.get("gameMap") or "Unknown"
+        if not is_ffa and num_teams is not None and player_teams is not None:
+            mode_text = format_team_mode(num_teams, player_teams, total_player_count)
+        else:
+            mode_text = game_mode_label
+            if not is_ffa and player_teams:
+                label = str(player_teams).strip()
+                if label and not label.isdigit():
+                    mode_text = f"{mode_text} ({player_teams})"
+        replay_link = f"https://openfront.io/#join={game_id}"
+        game_start = resolve_game_start(self.client, None, info)
+        game_end = resolve_game_end(info)
+        duration_seconds = None
+        if isinstance(info.get("duration"), (int, float)):
+            duration_seconds = int(info.get("duration"))
+        elif game_start and game_end:
+            duration_seconds = int((game_end - game_start).total_seconds())
+        tag_label = ", ".join(sorted(winning_tags_configured)) or "Clan"
+        ended_at_line = "Finished: unknown"
+        if game_end:
+            ended_at_line = f"Finished: <t:{int(game_end.replace(tzinfo=timezone.utc).timestamp())}:F>"
+        duration_label = format_duration_seconds(duration_seconds)
+        embed = discord.Embed(
+            title=f"🏆 Victory for {tag_label}!",
+            description=(
+                f"Map: **{map_name}**\n"
+                f"Mode: **{mode_text}**\n"
+                f"{ended_at_line} ({duration_label})\n"
+                f"Replay: {replay_link}"
+            ),
+            color=discord.Color.green(),
+        )
+        embed.add_field(
+            name="Winners",
+            value="\n".join(winners_lines) if winners_lines else "Unknown",
+            inline=False,
+        )
+        embed.add_field(
+            name="Opponents",
+            value="\n".join(opponent_lines) if opponent_lines else "None",
+            inline=False,
+        )
+        try:
+            await channel.send(embed=embed)
+        except Exception as exc:
+            LOGGER.warning(
+                "Failed posting results for %s in guild %s: %s",
+                game_id,
+                ctx.guild_id,
+                exc,
+            )
+            return False, True
+
+        ctx.models.PostedGame.create(
+            game_id=game_id,
+            game_start=game_start,
+            posted_at=utcnow_naive(),
+            winning_tags=(
+                json.dumps(sorted(winning_tags_configured))
+                if winning_tags_configured
+                else None
+            ),
+        )
+        return True, False
+
+    async def _seed_recent_results_games(self) -> int:
+        now = utcnow_naive()
+        start = now - timedelta(hours=2)
+        try:
+            public_games = await self.client.fetch_public_games(start, now)
+        except OpenFrontError as exc:
+            LOGGER.warning("Results test seed failed: %s", exc)
+            return 0
+        added = 0
+        for entry in public_games:
+            if not isinstance(entry, dict):
+                continue
+            game_id = extract_game_id(entry)
+            if not game_id:
+                continue
+            if track_game(game_id, next_attempt_at=now):
+                added += 1
+        if added:
+            self.results_wake_event.set()
+        return added
+
+    async def run_results_poll(self, ctx: GuildContext) -> str:
+        guild = self.get_guild(ctx.guild_id)
+        if not guild:
+            return "Guild unavailable"
+        settings = ctx.models.Settings.get_by_id(1)
+        if not settings.results_enabled:
+            return "Results disabled"
+        if not settings.results_channel_id:
+            return "Results channel not set"
+        if self.results_processing_lock.locked():
+            return "Results poll already running"
+        async with self.results_processing_lock:
+            posted, failures, _processed = await self._process_due_tracked_games(
+                summary_guild_id=ctx.guild_id
+            )
+        summary = f"Posted {posted} games, failures: {failures}"
+        LOGGER.info("Results poll guild=%s summary=%s", ctx.guild_id, summary)
+        return summary
 
     async def run_sync(self, ctx: GuildContext, manual: bool = False) -> str:
         if ctx.sync_lock.locked():
@@ -1027,10 +1212,7 @@ class CountingBot(commands.Bot):
         self.sync_queue.put_nowait(ctx.guild_id)
 
     def trigger_results_poll(self, ctx: GuildContext) -> bool:
-        if ctx.guild_id in self.results_in_flight:
-            return False
-        self.results_in_flight.add(ctx.guild_id)
-        self.results_queue.put_nowait(ctx.guild_id)
+        self.results_wake_event.set()
         return True
 
     async def apply_roles_with_queue(
@@ -1614,69 +1796,21 @@ async def setup_commands(bot: CountingBot):
 
     @app_commands.default_permissions(manage_guild=True)
     @tree.command(
-        name="post_game_results_interval",
-        description="Set the game results polling interval in seconds",
+        name="post_game_results_test",
+        description="Seed recent finished games for results testing",
     )
-    async def post_game_results_interval(
-        interaction: discord.Interaction, seconds: int
-    ):
+    async def post_game_results_test(interaction: discord.Interaction):
         admin_ctx = await require_admin(interaction)
         if not admin_ctx:
             return
         ctx, _member = admin_ctx
-        if seconds < 60 or seconds > 86400:
-            await interaction.response.send_message(
-                "Interval must be between 60 and 86400 seconds.",
-                ephemeral=True,
-            )
-            return
-        settings = ctx.models.Settings.get_by_id(1)
-        settings.results_interval_seconds = seconds
-        settings.save()
-        record_audit(
-            ctx.models,
-            interaction.user.id,
-            "results_interval",
-            {"seconds": seconds},
-        )
-        await interaction.response.send_message(
-            f"Results polling interval set to {seconds} seconds.",
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        added = await bot._seed_recent_results_games()
+        record_audit(ctx.models, interaction.user.id, "results_test", {"added": added})
+        await interaction.followup.send(
+            f"Seeded {added} game(s) for results processing.",
             ephemeral=True,
         )
-
-    @app_commands.default_permissions(manage_guild=True)
-    @tree.command(
-        name="post_game_results_sync",
-        description="Trigger an immediate game results poll",
-    )
-    async def post_game_results_sync(interaction: discord.Interaction):
-        admin_ctx = await require_admin(interaction)
-        if not admin_ctx:
-            return
-        ctx, _member = admin_ctx
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        summary = await bot.run_results_poll(ctx)
-        record_audit(ctx.models, interaction.user.id, "results_sync", {})
-        await interaction.followup.send(summary, ephemeral=True)
-
-    @app_commands.default_permissions(manage_guild=True)
-    @tree.command(
-        name="post_game_results_reset_window",
-        description="Reset results history and re-post recent wins",
-    )
-    async def post_game_results_reset_window(interaction: discord.Interaction):
-        admin_ctx = await require_admin(interaction)
-        if not admin_ctx:
-            return
-        ctx, _member = admin_ctx
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        ctx.models.PostedGame.delete().execute()
-        settings = ctx.models.Settings.get_by_id(1)
-        settings.results_last_poll_at = None
-        settings.save()
-        summary = await bot.run_results_poll(ctx)
-        record_audit(ctx.models, interaction.user.id, "results_reset_window", {})
-        await interaction.followup.send(summary, ephemeral=True)
 
     @app_commands.default_permissions(manage_guild=True)
     @tree.command(

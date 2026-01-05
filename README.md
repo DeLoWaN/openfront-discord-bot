@@ -9,7 +9,7 @@ This project maintainer graciously provide an hosted version of this bot if you 
 - Python 3.10+ and `pip`
 - Discord application with a bot token; enable the **Server Members Intent**
 - Ability to invite the bot with `Manage Roles`, `View Channels`, `Send Messages`, and `applications.commands` permissions
-- Network access to https://api.openfront.io
+- Network access to https://api.openfront.io and https://openfront.io
 - Guild roles created for each win tier, with the bot's role above them
 
 ## Discord setup
@@ -37,6 +37,7 @@ This project maintainer graciously provide an hosted version of this bot if you 
    central_database_path: "central.db"  # Registry for all guilds the bot joins
    log_level: "INFO"                    # CRITICAL | ERROR | WARNING | INFO | DEBUG
    sync_interval_hours: 24             # Background sync for every guild (1–24 hours)
+   results_lobby_poll_seconds: 2       # Public lobby poll interval (seconds)
    ```
    - You can set an environment variable `CONFIG_PATH=/absolute/path/to/config.yml` if the file lives elsewhere.
 
@@ -56,6 +57,13 @@ python -m src.bot
 - Add clan tags (used by the default `sessions_with_clan` mode) via `/clan_tag_add TAG`, or switch counting mode with `/set_mode total|sessions_since_link|sessions_with_clan`.
 - Test linking and role assignment with `/link <player_id>` and `/sync` (admin; you can target one user) or wait for the next scheduled sync.
 - To wipe data and make the bot leave a server, run `/guild_remove confirm:true` (admin only) and re-invite later if needed.
+
+## Game results posting
+The bot can post a victory embed when a tracked game finishes and one of your configured clan tags wins.
+- Set the destination channel with `/post_game_results_channel <channel>`.
+- Enable posting with `/post_game_results_start` (disable with `/post_game_results_stop`).
+- For testing, `/post_game_results_test` seeds recent games into the tracker.
+- Game IDs are discovered by polling public lobbies; results are deduped using `posted_games`.
 
 ## Counting modes
 The bot uses one counting mode at a time (change it with `/set_mode`). Pick what fits your server:
@@ -108,6 +116,10 @@ Useful commands:
 | `/admin_role_remove <role>` | Remove an admin role | Yes |
 | `/admin_roles` | List admin role IDs for this guild | Yes |
 | `/guild_remove confirm:true` | Delete this guild’s data from the bot | Yes |
+| `/post_game_results_start` | Enable posting game results | Yes |
+| `/post_game_results_stop` | Disable posting game results | Yes |
+| `/post_game_results_channel <channel>` | Set the channel for results posts | Yes |
+| `/post_game_results_test` | Seed recent games for results testing | Yes |
 
 ## Roles and clans
 - Thresholds are not pre-set; add them with `/roles_add` and view them with `/roles`.
@@ -116,7 +128,7 @@ Useful commands:
 
 ## Data storage and logging
 - Central registry at `central_database_path` tracks which servers the bot knows about.
-- Each server has its own SQLite DB under `guild_data/`, storing users, thresholds, clan tags, admin roles, settings, and audit entries.
+- Each server has its own SQLite DB under `guild_data/`, storing users, thresholds, clan tags, admin roles, settings, audit entries, and posted game IDs.
 - Logs go to stdout; adjust detail with `log_level` in the config. Watch for warnings about missing role IDs or sync failures.
 
 ## Systemd example (production)
