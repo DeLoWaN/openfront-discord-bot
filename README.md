@@ -59,20 +59,22 @@ python -m src.bot
 - Admin roles are auto-seeded from server roles that have `Administrator` or `Manage Guild`. You can add/remove admin roles later with commands.
 - Slash commands sync automatically to every guild the bot is in.
 - The background sync interval is global and comes from `sync_interval_hours` in the config (default 24 hours for every guild).
+- Role threshold assignments are disabled by default; enable them with `/roles_start` (pause with `/roles_stop`).
 - If a player ID returns 404 three times, sync is disabled for that user until they re-link.
 - `/guild_remove` deletes a guild's data and the bot leaves; re-invite to start fresh.
 
 ## After first launch
-- Add role thresholds with `/roles_add wins:<number> role:<pick a role>`, then check with `/roles`.
+- Add role thresholds with `/roles_add wins:<number> role:<pick a role>`, then check with `/roles_list`.
+- Enable role assignments with `/roles_start` once thresholds are ready (disable with `/roles_stop`).
 - Add clan tags (used by the default `sessions_with_clan` mode) via `/clan_tag_add TAG`, or switch counting mode with `/set_mode total|sessions_since_link|sessions_with_clan`.
 - Test linking and role assignment with `/link <player_id>` and `/sync` (admin; you can target one user) or wait for the next scheduled sync.
 - To wipe data and make the bot leave a server, run `/guild_remove confirm:true` (admin only) and re-invite later if needed.
 
 ## Game results posting
 The bot can post a victory embed when a tracked game finishes and one of your configured clan tags wins.
+- Results posting is disabled by default; enable it with `/post_game_results_start` (disable with `/post_game_results_stop`).
 - Add clan tags with `/clan_tag_add` (results will not post without tags).
 - Set the destination channel with `/post_game_results_channel <channel>`.
-- Enable posting with `/post_game_results_start` (disable with `/post_game_results_stop`).
 - For testing, `/post_game_results_test` seeds recent public games into the tracker.
 - Game IDs are discovered by polling public lobbies; results are deduped using `posted_games` and retried if the game is not finished yet.
 
@@ -101,7 +103,7 @@ What happens:
 Useful commands:
 - Add or update a tier: `/roles_add wins:<number> role:<pick a role>`
 - Remove a tier: `/roles_remove wins:<number>` or `/roles_remove role:<role>`
-- List tiers: `/roles`
+- List tiers: `/roles_list`
 
 ## Slash commands
 | Command | Purpose | Admin only? |
@@ -114,10 +116,12 @@ Useful commands:
 | `/get_mode` | Show current counting mode | Yes |
 | `/roles_add wins:<n> role:<role>` | Insert/update a role threshold | Yes |
 | `/roles_remove [wins] [role]` | Delete thresholds by wins and/or role ID | Yes |
-| `/roles` | List configured thresholds | No |
+| `/roles_list` | List configured thresholds | No |
+| `/roles_start` | Enable role threshold assignments | Yes |
+| `/roles_stop` | Disable role threshold assignments | Yes |
 | `/clan_tag_add <tag>` | Add a clan tag used for `sessions_with_clan` mode | Yes |
 | `/clan_tag_remove <tag>` | Remove a clan tag | Yes |
-| `/clans_list` | List stored clan tags | No |
+| `/clans_tag_list` | List stored clan tags | No |
 | `/link_override <user> <player_id>` | Admin override to link a user | Yes |
 | `/audit [page]` | Show recent audit entries (20 per page) | Yes |
 | `/admin_role_add <role>` | Add an admin role for this guild | Yes |
@@ -130,7 +134,7 @@ Useful commands:
 | `/post_game_results_test` | Seed recent games for results testing | Yes |
 
 ## Roles and clans
-- Thresholds are not pre-set; add them with `/roles_add` and view them with `/roles`.
+- Thresholds are not pre-set; add them with `/roles_add` and view them with `/roles_list`.
 - Make sure the bot's role is higher than your win-tier roles so it can assign them.
 - Clan tags are stored uppercased and matched against session `clanTag` or a `[TAG]` parsed from username for public games when using `sessions_with_clan` mode.
 

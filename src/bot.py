@@ -1070,6 +1070,7 @@ class CountingBot(commands.Bot):
                 return "Guild unavailable"
 
             settings = ctx.models.Settings.get_by_id(1)
+            roles_enabled = bool(settings.roles_enabled)
             now = utcnow_naive()
             if settings.backoff_until and settings.backoff_until > now:
                 msg = f"In backoff until {settings.backoff_until.isoformat()}"
@@ -1124,15 +1125,22 @@ class CountingBot(commands.Bot):
                     user.last_error_reason = None
                     if openfront_username:
                         user.last_openfront_username = openfront_username
-                    target_role_id = await self.apply_roles_with_queue(
-                        member, thresholds, win_count
-                    )
-                    user.last_role_id = target_role_id
+                    target_role_id = previous_role_id
+                    if roles_enabled:
+                        target_role_id = await self.apply_roles_with_queue(
+                            member, thresholds, win_count
+                        )
+                        user.last_role_id = target_role_id
                     user.last_username = getattr(member, "display_name", None)
                     user.save()
-                    role_action = (
-                        "unchanged" if target_role_id == previous_role_id else "updated"
-                    )
+                    if roles_enabled:
+                        role_action = (
+                            "unchanged"
+                            if target_role_id == previous_role_id
+                            else "updated"
+                        )
+                    else:
+                        role_action = "skipped"
                     LOGGER.debug(
                         "Sync user guild=%s user=%s player=%s mode=%s wins=%s role=%s prev_role=%s action=%s",
                         guild.id,
@@ -1346,8 +1354,10 @@ async def setup_commands(bot: CountingBot):
             last_openfront_username=openfront_username,
         ).on_conflict_replace().execute()
         win_count = None
+        roles_enabled = False
         try:
             settings = ctx.models.Settings.get_by_id(1)
+            roles_enabled = bool(settings.roles_enabled)
             clan_tags = [ct.tag_text for ct in ctx.models.ClanTag.select()]
             record = ctx.models.User.get_by_id(interaction.user.id)
             win_count, openfront_username_from_sync = await bot._compute_wins(
@@ -1364,7 +1374,7 @@ async def setup_commands(bot: CountingBot):
             elif guild:
                 member = guild.get_member(record.discord_user_id)
             thresholds = list(ctx.models.RoleThreshold.select())
-            if member:
+            if member and roles_enabled:
                 record.last_role_id = await bot.apply_roles_with_queue(
                     member, thresholds, win_count
                 )
@@ -1381,7 +1391,10 @@ async def setup_commands(bot: CountingBot):
             f"Linked to player `{player_id}`. Last OpenFront username: `{openfront_username or 'unknown'}`"
         ]
         if win_count is not None:
-            lines.append(f"Current wins: `{win_count}` (roles refreshed)")
+            if roles_enabled:
+                lines.append(f"Current wins: `{win_count}` (roles refreshed)")
+            else:
+                lines.append(f"Current wins: `{win_count}` (role assignment disabled)")
         else:
             lines.append("Could not fetch wins immediately; will update on next sync.")
         await interaction.followup.send("\n".join(lines), ephemeral=True)
@@ -1501,6 +1514,7 @@ async def setup_commands(bot: CountingBot):
                 )
                 return
             settings = ctx.models.Settings.get_by_id(1)
+            roles_enabled = bool(settings.roles_enabled)
             clan_tags = [ct.tag_text for ct in ctx.models.ClanTag.select()]
             win_count, openfront_username = await bot._compute_wins(
                 record, settings.counting_mode, clan_tags
@@ -1508,17 +1522,19 @@ async def setup_commands(bot: CountingBot):
             record.last_win_count = win_count
             if openfront_username:
                 record.last_openfront_username = openfront_username
-            thresholds = list(ctx.models.RoleThreshold.select())
-            record.last_role_id = await bot.apply_roles_with_queue(
-                user, thresholds, win_count
-            )
+            if roles_enabled:
+                thresholds = list(ctx.models.RoleThreshold.select())
+                record.last_role_id = await bot.apply_roles_with_queue(
+                    user, thresholds, win_count
+                )
             record.last_username = getattr(user, "display_name", None)
             record.save()
             record_audit(
                 ctx.models, interaction.user.id, "sync_user", {"user": user.id}
             )
+            suffix = "" if roles_enabled else " (role assignment disabled)"
             await interaction.followup.send(
-                f"Synced {user.display_name}: {win_count} wins", ephemeral=True
+                f"Synced {user.display_name}: {win_count} wins{suffix}", ephemeral=True
             )
             return
         summary = await bot.run_sync(ctx, manual=True)
@@ -1569,6 +1585,43 @@ async def setup_commands(bot: CountingBot):
         settings = ctx.models.Settings.get_by_id(1)
         await interaction.response.send_message(
             f"Current counting mode: {settings.counting_mode}", ephemeral=True
+        )
+
+    @app_commands.default_permissions(manage_guild=True)
+    @tree.command(
+        name="roles_start",
+        description="Enable role threshold assignments",
+    )
+    async def roles_start(interaction: discord.Interaction):
+        admin_ctx = await require_admin(interaction)
+        if not admin_ctx:
+            return
+        ctx, _member = admin_ctx
+        settings = ctx.models.Settings.get_by_id(1)
+        settings.roles_enabled = 1
+        settings.save()
+        record_audit(ctx.models, interaction.user.id, "roles_start", {})
+        bot.trigger_sync(ctx)
+        await interaction.response.send_message(
+            "Role threshold assignments enabled.", ephemeral=True
+        )
+
+    @app_commands.default_permissions(manage_guild=True)
+    @tree.command(
+        name="roles_stop",
+        description="Disable role threshold assignments",
+    )
+    async def roles_stop(interaction: discord.Interaction):
+        admin_ctx = await require_admin(interaction)
+        if not admin_ctx:
+            return
+        ctx, _member = admin_ctx
+        settings = ctx.models.Settings.get_by_id(1)
+        settings.roles_enabled = 0
+        settings.save()
+        record_audit(ctx.models, interaction.user.id, "roles_stop", {})
+        await interaction.response.send_message(
+            "Role threshold assignments disabled.", ephemeral=True
         )
 
     @app_commands.default_permissions(manage_guild=True)
@@ -1651,8 +1704,8 @@ async def setup_commands(bot: CountingBot):
             f"Removed {deleted} role threshold(s).", ephemeral=True
         )
 
-    @tree.command(name="roles", description="List role thresholds")
-    async def roles(interaction: discord.Interaction):
+    @tree.command(name="roles_list", description="List role thresholds")
+    async def roles_list(interaction: discord.Interaction):
         ctx = await resolve_context(interaction)
         if not ctx:
             return
@@ -1718,8 +1771,8 @@ async def setup_commands(bot: CountingBot):
             f"Removed {deleted} clan tag(s) matching '{tag_norm}'", ephemeral=True
         )
 
-    @tree.command(name="clans_list", description="List clan tags")
-    async def clans_list(interaction: discord.Interaction):
+    @tree.command(name="clans_tag_list", description="List clan tags")
+    async def clans_tag_list(interaction: discord.Interaction):
         ctx = await resolve_context(interaction)
         if not ctx:
             return

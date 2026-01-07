@@ -66,6 +66,7 @@ def test_run_sync_assigns_role_in_total_mode(tmp_path):
     )
     settings = models.Settings.get_by_id(1)
     settings.counting_mode = "total"
+    settings.roles_enabled = 1
     settings.save()
 
     guild, member = fake_guild_with_member(
@@ -97,6 +98,50 @@ def test_run_sync_assigns_role_in_total_mode(tmp_path):
     assert member.removed_roles == []
 
 
+def test_run_sync_skips_roles_when_disabled(tmp_path):
+    bot = make_bot(tmp_path)
+    ctx = make_context(tmp_path)
+    models = ctx.models
+
+    models.RoleThreshold.create(wins=5, role_id=1)
+    models.User.create(
+        discord_user_id=42,
+        player_id="p1",
+        linked_at=datetime.now(timezone.utc).replace(tzinfo=None),
+    )
+    settings = models.Settings.get_by_id(1)
+    settings.counting_mode = "total"
+    settings.roles_enabled = 0
+    settings.save()
+
+    guild, member = fake_guild_with_member(
+        ctx.guild_id, 42, [FakeRole(1, "Bronze")]
+    )
+    bot.get_guild = cast(Any, lambda gid: guild if gid == ctx.guild_id else None)
+    bot.client = cast(
+        Any,
+        FakeOpenFront(
+            player_data={
+                "stats": {
+                    "Public": {
+                        "Free For All": {"Medium": {"wins": 5}},
+                        "Team": {"Medium": {"wins": 0}},
+                    }
+                }
+            },
+        ),
+    )
+
+    bot.guild_contexts[ctx.guild_id] = ctx
+    asyncio.run(bot.run_sync(ctx, manual=True))
+
+    record = models.User.get_by_id(42)
+    assert record.last_win_count == 5
+    assert record.last_role_id is None
+    assert member.added_roles == []
+    assert member.removed_roles == []
+
+
 def test_run_sync_sessions_with_clan(tmp_path):
     bot = make_bot(tmp_path)
     ctx = make_context(tmp_path)
@@ -111,6 +156,7 @@ def test_run_sync_sessions_with_clan(tmp_path):
     models.ClanTag.create(tag_text="ABC")
     settings = models.Settings.get_by_id(1)
     settings.counting_mode = "sessions_with_clan"
+    settings.roles_enabled = 1
     settings.save()
 
     guild, member = fake_guild_with_member(
@@ -143,6 +189,7 @@ def test_run_sync_sessions_since_link(tmp_path):
     models.User.create(discord_user_id=77, player_id="p3", linked_at=linked_at)
     settings = models.Settings.get_by_id(1)
     settings.counting_mode = "sessions_since_link"
+    settings.roles_enabled = 1
     settings.save()
 
     guild, member = fake_guild_with_member(

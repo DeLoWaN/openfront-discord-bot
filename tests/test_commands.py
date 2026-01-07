@@ -244,6 +244,9 @@ def test_link_creates_user_and_reports_wins(tmp_path):
     bot = make_bot(tmp_path)
     ctx = make_context(tmp_path)
     bot.guild_contexts[ctx.guild_id] = ctx
+    settings = ctx.models.Settings.get_by_id(1)
+    settings.roles_enabled = 1
+    settings.save()
     stub_bot_calculations(bot, win_total=7, applied_role=999)
     bot.client = FakeOpenFront()
 
@@ -346,6 +349,9 @@ def test_sync_single_user_updates_record(tmp_path):
     bot = make_bot(tmp_path)
     ctx = make_context(tmp_path)
     bot.guild_contexts[ctx.guild_id] = ctx
+    settings = ctx.models.Settings.get_by_id(1)
+    settings.roles_enabled = 1
+    settings.save()
     stub_bot_calculations(bot, win_total=11, applied_role=321)
     ctx.models.User.create(
         discord_user_id=50,
@@ -396,6 +402,30 @@ def test_set_mode_and_get_mode(tmp_path):
     assert interaction_get.response.message == "Current counting mode: total"
 
 
+def test_roles_start_stop_updates_settings(tmp_path):
+    bot = make_bot(tmp_path)
+    ctx = make_context(tmp_path)
+    bot.guild_contexts[ctx.guild_id] = ctx
+
+    commands = capture_commands(bot.tree)
+    asyncio.run(setup_commands(bot))
+
+    guild = FakeGuild(id=ctx.guild_id, roles=[], members={})
+    admin = CommandMember(user_id=1, guild=guild)
+
+    interaction_start = CommandInteraction(guild=guild, user=admin)
+    asyncio.run(commands["roles_start"](interaction_start))
+    settings = ctx.models.Settings.get_by_id(1)
+    assert settings.roles_enabled == 1
+    assert interaction_start.response.message == "Role threshold assignments enabled."
+
+    interaction_stop = CommandInteraction(guild=guild, user=admin)
+    asyncio.run(commands["roles_stop"](interaction_stop))
+    settings = ctx.models.Settings.get_by_id(1)
+    assert settings.roles_enabled == 0
+    assert interaction_stop.response.message == "Role threshold assignments disabled."
+
+
 def test_roles_remove_and_list(tmp_path):
     bot = make_bot(tmp_path)
     ctx = make_context(tmp_path)
@@ -419,7 +449,7 @@ def test_roles_remove_and_list(tmp_path):
     assert interaction_remove.response.ephemeral is True
 
     interaction_roles = CommandInteraction(guild=guild, user=admin)
-    asyncio.run(commands["roles"](interaction_roles))
+    asyncio.run(commands["roles_list"](interaction_roles))
     assert "10 wins: <@&201>" in interaction_roles.response.message
     assert interaction_roles.response.ephemeral is True
 
@@ -440,7 +470,7 @@ def test_clan_tag_add_remove_and_list(tmp_path):
     assert interaction_add.response.message == "Clan tag 'ABC' added"
 
     interaction_list = CommandInteraction(guild=guild, user=admin)
-    asyncio.run(commands["clans_list"](interaction_list))
+    asyncio.run(commands["clans_tag_list"](interaction_list))
     assert interaction_list.response.message == "ABC"
 
     interaction_remove = CommandInteraction(guild=guild, user=admin)

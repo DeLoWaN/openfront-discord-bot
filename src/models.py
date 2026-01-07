@@ -80,6 +80,7 @@ def _create_guild_models(db: SqliteDatabase) -> GuildModels:
         sync_interval_minutes = IntegerField()
         backoff_until = DateTimeField(null=True)
         last_sync_at = DateTimeField(null=True)
+        roles_enabled = IntegerField(default=0)
         results_enabled = IntegerField(default=0)
         results_channel_id = IntegerField(null=True)
 
@@ -158,6 +159,10 @@ def init_guild_db(path: str, guild_id: int) -> GuildModels:
             f"PRAGMA table_info({settings_table});"
         ).fetchall()
         settings_col_names = {row[1] for row in settings_cols}
+        if "roles_enabled" not in settings_col_names:
+            db.execute_sql(
+                f"ALTER TABLE {settings_table} ADD COLUMN roles_enabled INTEGER NOT NULL DEFAULT 0"
+            )
         if "results_enabled" not in settings_col_names:
             db.execute_sql(
                 f"ALTER TABLE {settings_table} ADD COLUMN results_enabled INTEGER NOT NULL DEFAULT 0"
@@ -196,6 +201,7 @@ def init_guild_db(path: str, guild_id: int) -> GuildModels:
             id=1,
             counting_mode=DEFAULT_COUNTING_MODE,
             sync_interval_minutes=DEFAULT_SYNC_INTERVAL,
+            roles_enabled=0,
         )
 
     return models
