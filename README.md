@@ -1,4 +1,4 @@
-# OpenFront Roles Discord Bot
+# OpenFront Discord Bot
 
 Discord bot for multiple Discord servers (guilds). It links members to OpenFront player IDs, counts wins from the OpenFront public API, assigns tier roles based on thresholds, and can post victory embeds for configured clan tags. Each guild keeps its own SQLite database so data stays isolated.
 
@@ -6,11 +6,12 @@ Discord bot for multiple Discord servers (guilds). It links members to OpenFront
 This project's maintainer provides a hosted version if you do not want to self-host. Install it here: https://discord.com/oauth2/authorize?client_id=1453381112134111354
 
 ## Features
-- Link Discord users to OpenFront player IDs and store the last OpenFront username seen.
-- Automatic role assignment based on win thresholds; lower tiers are removed.
-- Counting modes: total wins, wins since link, or wins in public sessions with clan tags.
+- Link Discord users to OpenFront player IDs to assign roles and mention winners from games.
+- Automatic role assignment based on win thresholds
+- Counting modes for role assigment: total wins, wins since date, or wins in public sessions with configurable clan tags.
 - Background sync for all guilds plus manual sync on demand.
 - Optional game results posting by polling public lobbies and posting victory embeds.
+  <img width="372" height="330" alt="image" src="https://github.com/user-attachments/assets/089596be-1908-49ec-878e-daae968dfbf9" />
 - Admin tools: audit log, admin role list, and link overrides.
 
 ## Prerequisites
