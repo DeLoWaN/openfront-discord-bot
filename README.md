@@ -77,6 +77,7 @@ The bot can post a victory embed when a tracked game finishes and one of your co
 - Set the destination channel with `/post_game_results_channel <channel>`.
 - For testing, `/post_game_results_test` seeds recent public games into the tracker.
 - Game IDs are discovered by polling public lobbies; results are deduped using `posted_games` and retried if the game is not finished yet.
+- Winner mentions in embeds only work when the player is linked to an OpenFront ID and their latest synced OpenFront username matches the winner username (the public winners API only provides usernames, not player IDs).
 
 ## Counting modes
 The bot uses one counting mode at a time (change it with `/set_mode`). Pick what fits your server:

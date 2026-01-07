@@ -1023,7 +1023,7 @@ class CountingBot(commands.Bot):
 
     async def _seed_recent_results_games(self) -> int:
         now = utcnow_naive()
-        start = now - timedelta(hours=2)
+        start = now - timedelta(minutes=30)
         try:
             public_games = await self.client.fetch_public_games(start, now)
         except OpenFrontError as exc:
