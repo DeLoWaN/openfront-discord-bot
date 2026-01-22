@@ -372,6 +372,55 @@ def test_results_poll_posts_when_winner_tags_mixed_includes_guild(tmp_path):
     assert "Enemy" not in winners_field["value"]
 
 
+def test_results_poll_truncates_long_fields(tmp_path):
+    bot = make_bot(tmp_path)
+    ctx = make_context(tmp_path)
+    bot.guild_contexts[ctx.guild_id] = ctx
+    ctx.models.ClanTag.create(tag_text="NU")
+    enable_results(ctx, channel_id=111)
+
+    channel = FakeChannel(id=111)
+    guild = FakeGuild(id=ctx.guild_id, roles=[], members={}, channels={111: channel})
+    bot.get_guild = cast(Any, lambda gid: guild if gid == ctx.guild_id else None)
+
+    opponents = [
+        {"clientID": f"o{i}", "username": f"Enemy{i:03d}", "clanTag": "OPP"}
+        for i in range(200)
+    ]
+    game = {
+        "info": {
+            "config": {
+                "gameMap": "M" * 5000,
+                "gameMode": "Team",
+                "playerTeams": "Duos",
+            },
+            "numTeams": 2,
+            "players": [
+                {"clientID": "c1", "username": "Ace", "clanTag": "NU"},
+                *opponents,
+            ],
+            "winner": ["team", "Team 1", "c1"],
+            "start": 1763338803169,
+        }
+    }
+    bot.client = FakeOpenFront(games={"g10": game})
+    queue_game("g10")
+
+    asyncio.run(bot.run_results_poll(ctx))
+
+    embed = channel.sent_embeds[0]
+    assert embed.title is not None
+    assert len(embed.title) <= 256
+    assert embed.description is not None
+    assert len(embed.description) <= 4096
+    assert embed.description.endswith("...")
+    opponents_field = next(
+        field for field in embed.fields if field["name"] == "Opponents"
+    )
+    assert len(opponents_field["value"]) <= 1024
+    assert opponents_field["value"].endswith("...")
+
+
 def test_results_poll_skips_mentions_on_multiple_matches(tmp_path):
     bot = make_bot(tmp_path)
     ctx = make_context(tmp_path)

@@ -58,6 +58,9 @@ RESULTS_GAME_RETRY_SECONDS = 60
 RESULTS_TRACKED_BATCH_LIMIT = 25
 RESULTS_GAME_UNEXPECTED_FAILURE_LIMIT = 3
 RESULTS_GAME_EXPECTED_STATUSES = {404, 429, 500, 502, 503, 504}
+EMBED_TITLE_LIMIT = 256
+EMBED_DESCRIPTION_LIMIT = 4096
+EMBED_FIELD_VALUE_LIMIT = 1024
 Threshold = Any
 
 
@@ -282,6 +285,26 @@ def format_duration_seconds(duration_seconds: Optional[int]) -> str:
     if seconds or not parts:
         parts.append(f"{seconds}s")
     return " ".join(parts)
+
+
+def truncate_embed_value(value: str, limit: int) -> str:
+    if len(value) <= limit:
+        return value
+    if limit <= 3:
+        return value[:limit]
+    cutoff = value.rfind("\n", 0, limit - 3)
+    if cutoff == -1:
+        return value[: limit - 3] + "..."
+    return value[:cutoff] + "\n..."
+
+
+def format_embed_field_value(
+    lines: list[str], empty_value: str, limit: int = EMBED_FIELD_VALUE_LIMIT
+) -> str:
+    if not lines:
+        return empty_value
+    value = "\n".join(lines)
+    return truncate_embed_value(value, limit)
 
 
 async def apply_roles(
@@ -986,24 +1009,31 @@ class CountingBot(commands.Bot):
         if game_end:
             ended_at_line = f"Finished: <t:{int(game_end.replace(tzinfo=timezone.utc).timestamp())}:F>"
         duration_label = format_duration_seconds(duration_seconds)
-        embed = discord.Embed(
-            title=f"🏆 Victory for {tag_label}!",
-            description=(
+        title = truncate_embed_value(
+            f"🏆 Victory for {tag_label}!", EMBED_TITLE_LIMIT
+        )
+        description = truncate_embed_value(
+            (
                 f"Map: **{map_name}**\n"
                 f"Mode: **{mode_text}**\n"
                 f"{ended_at_line} ({duration_label})\n"
                 f"Replay: {replay_link}"
             ),
+            EMBED_DESCRIPTION_LIMIT,
+        )
+        embed = discord.Embed(
+            title=title,
+            description=description,
             color=discord.Color.green(),
         )
         embed.add_field(
             name="Winners",
-            value="\n".join(winners_lines) if winners_lines else "Unknown",
+            value=format_embed_field_value(winners_lines, "Unknown"),
             inline=False,
         )
         embed.add_field(
             name="Opponents",
-            value="\n".join(opponent_lines) if opponent_lines else "None",
+            value=format_embed_field_value(opponent_lines, "None"),
             inline=False,
         )
         try:
