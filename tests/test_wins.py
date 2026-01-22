@@ -145,3 +145,42 @@ def test_compute_wins_sessions_with_clan_without_configured_tags_requires_clanta
     client = FakeOpenFront(sessions=sessions)
     wins = asyncio.run(compute_wins_sessions_with_clan(client, "p1", []))
     assert wins == 2
+
+
+def test_compute_wins_sessions_since_link_skips_humans_vs_nations():
+    now = datetime.now(timezone.utc)
+    linked_at = (now - timedelta(days=1)).replace(tzinfo=None)
+    sessions = [
+        {
+            "gameStart": (linked_at + timedelta(hours=1)).isoformat(),
+            "hasWon": True,
+            "playerTeams": "Humans Vs Nations",
+        },
+        {
+            "gameStart": (linked_at + timedelta(hours=2)).isoformat(),
+            "hasWon": True,
+        },
+    ]
+    client = FakeOpenFront(sessions=sessions)
+    wins = asyncio.run(compute_wins_sessions_since_link(client, "p1", linked_at))
+    assert wins == 1
+
+
+def test_compute_wins_sessions_with_clan_skips_humans_vs_nations():
+    sessions = [
+        {
+            "username": "[ABC]Player",
+            "hasWon": True,
+            "gameType": "Public",
+            "playerTeams": "Humans Vs Nations",
+        },
+        {
+            "username": "[ABC]Player",
+            "hasWon": True,
+            "gameType": "Public",
+            "playerTeams": "Duos",
+        },
+    ]
+    client = FakeOpenFront(sessions=sessions)
+    wins = asyncio.run(compute_wins_sessions_with_clan(client, "p1", ["abc"]))
+    assert wins == 1

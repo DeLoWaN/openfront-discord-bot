@@ -27,6 +27,12 @@ class OpenFrontLike(Protocol):
 
 LOGGER = logging.getLogger(__name__)
 
+_HUMANS_VS_NATIONS_LABEL = "Humans Vs Nations"
+
+
+def is_humans_vs_nations(player_teams: Any) -> bool:
+    return isinstance(player_teams, str) and player_teams == _HUMANS_VS_NATIONS_LABEL
+
 
 async def compute_wins_total(client: OpenFrontLike, player_id: str) -> int:
     data = await client.fetch_player(player_id)
@@ -65,6 +71,8 @@ def compute_wins_sessions_since_link_from_sessions(
 ) -> int:
     wins = 0
     for session in sessions:
+        if is_humans_vs_nations(session.get("playerTeams")):
+            continue
         # Prefer gameStart; fall back to gameEnd if start is missing.
         start_time = client.session_start_time(session)
         if not start_time:
@@ -84,6 +92,8 @@ def compute_wins_sessions_with_clan_from_sessions(
     normalized_tags = [tag.upper() for tag in clan_tags]
     wins = 0
     for session in sessions:
+        if is_humans_vs_nations(session.get("playerTeams")):
+            continue
         game_type = session.get("gameType")
         if str(game_type).upper() != "PUBLIC":
             continue

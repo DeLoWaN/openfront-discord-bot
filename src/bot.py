@@ -42,6 +42,7 @@ from .wins import (
     compute_wins_sessions_since_link_from_sessions,
     compute_wins_sessions_with_clan_from_sessions,
     compute_wins_total,
+    is_humans_vs_nations,
     last_session_username,
     last_session_username_from_sessions,
 )
@@ -859,6 +860,13 @@ class CountingBot(commands.Bot):
         is_ffa = game_mode_label.strip().lower() == "free for all"
         num_teams = info.get("numTeams") or config.get("numTeams")
         player_teams = info.get("playerTeams") or config.get("playerTeams")
+        if is_humans_vs_nations(player_teams):
+            LOGGER.debug(
+                "Skipping Humans vs Nations game %s for guild %s",
+                game_id,
+                ctx.guild_id,
+            )
+            return False, False
         total_player_count = info.get("totalPlayerCount")
         max_players = config.get("maxPlayers")
         if total_player_count is None and isinstance(max_players, (int, float)):

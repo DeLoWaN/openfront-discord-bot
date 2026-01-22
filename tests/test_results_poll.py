@@ -278,6 +278,39 @@ def test_results_poll_marks_died_early(tmp_path):
     assert "+1 other player" in winners_field["value"]
 
 
+def test_results_poll_skips_humans_vs_nations_mode(tmp_path):
+    bot = make_bot(tmp_path)
+    ctx = make_context(tmp_path)
+    bot.guild_contexts[ctx.guild_id] = ctx
+    ctx.models.ClanTag.create(tag_text="NU")
+    enable_results(ctx, channel_id=606)
+
+    channel = FakeChannel(id=606)
+    guild = FakeGuild(id=ctx.guild_id, roles=[], members={}, channels={606: channel})
+    bot.get_guild = cast(Any, lambda gid: guild if gid == ctx.guild_id else None)
+
+    game = {
+        "info": {
+            "config": {
+                "gameMap": "Gamma",
+                "gameMode": "Team",
+                "playerTeams": "Humans Vs Nations",
+            },
+            "players": [{"clientID": "c1", "username": "Ace", "clanTag": "NU"}],
+            "winner": ["team", "Team 1", "c1"],
+            "start": 1763338803169,
+        }
+    }
+    bot.client = FakeOpenFront(games={"g6": game})
+    queue_game("g6")
+
+    summary = asyncio.run(bot.run_results_poll(ctx))
+
+    assert "Posted 0 games" in summary
+    assert channel.sent_embeds == []
+    assert ctx.models.PostedGame.select().count() == 0
+
+
 def test_results_poll_skips_when_winner_tag_missing(tmp_path):
     bot = make_bot(tmp_path)
     ctx = make_context(tmp_path)
