@@ -17,6 +17,9 @@ from ..data.shared.models import (
 
 _CLAN_TAG_RE = re.compile(r"\[([A-Za-z0-9]+)\]")
 _LEADING_CLAN_TAG_RE = re.compile(r"^\s*\[([A-Za-z0-9]+)\]\s*(.*)$")
+_TEAM_ROLE_LABEL_MIN_GAMES = 5
+_TEAM_ROLE_LABEL_DOMINANT_SHARE = 0.55
+_ACTIVE_TEAM_ROLE_LABELS = ("Frontliner", "Hybrid", "Backliner")
 
 
 @dataclass(frozen=True)
@@ -134,6 +137,14 @@ def _safe_int(value: Any) -> int:
         return int(float(value))
     except (TypeError, ValueError):
         return 0
+
+
+def _field_int(value: Any) -> int:
+    return int(value)
+
+
+def _field_str(value: Any) -> str:
+    return str(value)
 
 
 def _extract_turn_metrics(payload: dict[str, Any]) -> dict[str, dict[str, int]]:
@@ -288,11 +299,11 @@ def ingest_game_payload(payload: dict[str, Any]) -> GameIngestionSummary:
         for guild in guilds:
             normalized_username = normalize_observed_username(
                 username,
-                tracked_tags_by_guild_id.get(guild.id, set()),
+                tracked_tags_by_guild_id.get(_field_int(guild.id), set()),
             )
             if not normalized_username:
                 continue
-            matched_guild_ids.add(guild.id)
+            matched_guild_ids.add(_field_int(guild.id))
             matched_rows.append(
                 {
                     "guild": guild,
@@ -325,7 +336,11 @@ def ingest_game_payload(payload: dict[str, Any]) -> GameIngestionSummary:
     for row in matched_rows:
         GameParticipant.create(game=game, **row)
 
-    return GameIngestionSummary(game.openfront_game_id, matched_guild_ids, len(matched_rows))
+    return GameIngestionSummary(
+        _field_str(game.openfront_game_id),
+        matched_guild_ids,
+        len(matched_rows),
+    )
 
 
 def _is_team_mode(mode_name: str | None) -> bool:
@@ -380,11 +395,17 @@ def _compute_support_bonus(payload: dict[str, Any]) -> float:
     return round(min(base_team_score * 0.1, adjusted_bonus), 2)
 
 
-def _compute_role_label(payload: dict[str, Any]) -> str:
-    donated_troops_total = int(payload["donated_troops_total"])
-    donation_action_count = int(payload["donation_action_count"])
-    attack_troops_total = int(payload["attack_troops_total"])
-    attack_action_count = int(payload["attack_action_count"])
+def _compute_team_game_role(
+    *,
+    donated_troops_total: int,
+    donation_action_count: int,
+    attack_troops_total: int,
+    attack_action_count: int,
+) -> str:
+    donated_troops_total = int(donated_troops_total)
+    donation_action_count = int(donation_action_count)
+    attack_troops_total = int(attack_troops_total)
+    attack_action_count = int(attack_action_count)
     denominator = donated_troops_total + attack_troops_total
     support_share = donated_troops_total / denominator if denominator > 0 else 0.0
 
@@ -397,6 +418,41 @@ def _compute_role_label(payload: dict[str, Any]) -> str:
     if attack_troops_total > 0 or attack_action_count > 0:
         return "Frontliner"
     return "Flexible"
+
+
+def _compute_role_label(payload: dict[str, Any]) -> str:
+    team_game_count = int(payload.get("team_game_count") or 0)
+    if team_game_count < _TEAM_ROLE_LABEL_MIN_GAMES:
+        return "Flexible"
+
+    role_counts = payload.get("_team_role_counts") or {}
+    active_games = sum(int(role_counts.get(label, 0) or 0) for label in _ACTIVE_TEAM_ROLE_LABELS)
+    if active_games <= 0:
+        return "Flexible"
+
+    frontliner_share = int(role_counts.get("Frontliner", 0) or 0) / active_games
+    backliner_share = int(role_counts.get("Backliner", 0) or 0) / active_games
+
+    if frontliner_share >= _TEAM_ROLE_LABEL_DOMINANT_SHARE:
+        return "Frontliner"
+    if backliner_share >= _TEAM_ROLE_LABEL_DOMINANT_SHARE:
+        return "Backliner"
+    return "Hybrid"
+
+
+def _initial_team_role_counts() -> dict[str, int]:
+    return {label: 0 for label in (*_ACTIVE_TEAM_ROLE_LABELS, "Flexible")}
+
+
+def _record_team_game_role(payload: dict[str, Any], participant: GameParticipant) -> None:
+    team_role_counts = payload.setdefault("_team_role_counts", _initial_team_role_counts())
+    game_role = _compute_team_game_role(
+        donated_troops_total=_field_int(participant.donated_troops_total),
+        donation_action_count=_field_int(participant.donation_action_count),
+        attack_troops_total=_field_int(participant.attack_troops_total),
+        attack_action_count=_field_int(participant.attack_action_count),
+    )
+    team_role_counts[game_role] = int(team_role_counts.get(game_role, 0) or 0) + 1
 
 
 def _mode_confidence(game_count: int) -> float:
@@ -441,7 +497,7 @@ def _compute_mode_indexes(
 
 def refresh_guild_player_aggregates(guild_id: int | Guild) -> list[GuildPlayerAggregate]:
     guild = guild_id if isinstance(guild_id, Guild) else Guild.get_by_id(guild_id)
-    tracked_tags = _tracked_tags_by_guild_id().get(guild.id, set())
+    tracked_tags = _tracked_tags_by_guild_id().get(_field_int(guild.id), set())
     GuildPlayerAggregate.delete().where(GuildPlayerAggregate.guild == guild).execute()
     participants = (
         GameParticipant.select(GameParticipant, ObservedGame)
@@ -484,6 +540,7 @@ def refresh_guild_player_aggregates(guild_id: int | Guild) -> list[GuildPlayerAg
                 "last_ffa_game_at": None,
                 "last_game_at": game_time,
                 "_team_result_points": 0.0,
+                "_team_role_counts": _initial_team_role_counts(),
             },
         )
         current["win_count"] += int(bool(participant.did_win))
@@ -513,6 +570,7 @@ def refresh_guild_player_aggregates(guild_id: int | Guild) -> list[GuildPlayerAg
                 if bool(participant.did_win)
                 else 0.0
             )
+            _record_team_game_role(current, participant)
             if game_time and (
                 current["last_team_game_at"] is None
                 or game_time >= current["last_team_game_at"]
@@ -558,6 +616,7 @@ def refresh_guild_player_aggregates(guild_id: int | Guild) -> list[GuildPlayerAg
         payload["role_label"] = _compute_role_label(payload)
         payload.pop("_base_team_score", None)
         payload.pop("_team_result_points", None)
+        payload.pop("_team_role_counts", None)
 
     team_indexes = _compute_mode_indexes(
         payloads,

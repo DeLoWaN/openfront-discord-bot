@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from peewee import SqliteDatabase
 
@@ -77,8 +77,8 @@ def test_ingest_game_payload_persists_guild_relevant_participants_and_aggregates
     }
 
     summary = ingest_game_payload(payload)
-    refresh_guild_player_aggregates(north.id)
-    refresh_guild_player_aggregates(deer.id)
+    refresh_guild_player_aggregates(north)
+    refresh_guild_player_aggregates(deer)
 
     north_aggregates = list(
         GuildPlayerAggregate.select().where(GuildPlayerAggregate.guild == north)
@@ -188,7 +188,7 @@ def test_refresh_guild_player_aggregates_merges_tracked_tag_variants_only(
         }
     )
 
-    aggregates = refresh_guild_player_aggregates(guild.id)
+    aggregates = refresh_guild_player_aggregates(guild)
 
     assert len(aggregates) == 2
     merged = GuildPlayerAggregate.get(
@@ -280,7 +280,7 @@ def test_refresh_guild_player_aggregates_weights_overall_score_by_mode_confidenc
             ended_at=datetime(2026, 3, 1, 12, 0, 0),
         )
 
-    refresh_guild_player_aggregates(guild.id)
+    refresh_guild_player_aggregates(guild)
 
     team_king = GuildPlayerAggregate.get(
         GuildPlayerAggregate.normalized_username == "teamking"
@@ -331,7 +331,7 @@ def test_refresh_guild_player_aggregates_falls_back_to_team_score_without_ffa_ga
             did_win=1,
         )
 
-    refresh_guild_player_aggregates(guild.id)
+    refresh_guild_player_aggregates(guild)
 
     temujin = GuildPlayerAggregate.get(
         GuildPlayerAggregate.normalized_username == "temujin"
@@ -405,7 +405,7 @@ def test_ingest_team_payload_tracks_support_metrics_and_mode_specific_aggregates
         }
     )
 
-    refresh_guild_player_aggregates(guild.id)
+    refresh_guild_player_aggregates(guild)
 
     support_participant = GameParticipant.get(
         GameParticipant.normalized_username == "support"
@@ -428,6 +428,156 @@ def test_ingest_team_payload_tracks_support_metrics_and_mode_specific_aggregates
     assert support_aggregate.team_win_count == 1
     assert support_aggregate.ffa_game_count == 0
     assert support_aggregate.support_bonus > 0
-    assert support_aggregate.role_label == "Backliner"
+    assert support_aggregate.role_label == "Flexible"
     assert front_aggregate.support_bonus == 0
-    assert front_aggregate.role_label == "Frontliner"
+    assert front_aggregate.role_label == "Flexible"
+
+
+def test_refresh_guild_player_aggregates_uses_team_role_mix_for_role_labels(tmp_path):
+    from src.data.shared.models import GameParticipant, GuildPlayerAggregate, ObservedGame
+    from src.services.guild_sites import provision_guild_site
+    from src.services.guild_stats_api import build_leaderboard_response
+    from src.services.openfront_ingestion import refresh_guild_player_aggregates
+
+    setup_shared_database(tmp_path)
+    guild = provision_guild_site(
+        slug="north",
+        subdomain="north",
+        display_name="North",
+        clan_tags=["NU"],
+    )
+
+    def add_team_game(
+        username: str,
+        normalized_username: str,
+        index: int,
+        *,
+        donated_troops_total: int = 0,
+        donated_gold_total: int = 0,
+        donation_action_count: int = 0,
+        attack_troops_total: int = 0,
+        attack_action_count: int = 0,
+    ) -> None:
+        game = ObservedGame.create(
+            openfront_game_id=f"{normalized_username}-{index}",
+            game_type="PUBLIC",
+            mode_name="Team",
+            num_teams=4,
+            ended_at=datetime(2026, 3, 1, 12, 0, 0) + timedelta(days=index),
+        )
+        GameParticipant.create(
+            game=game,
+            guild=guild,
+            raw_username=username,
+            normalized_username=normalized_username,
+            raw_clan_tag="NU",
+            effective_clan_tag="NU",
+            clan_tag_source="api",
+            client_id=f"{normalized_username}-{index}",
+            did_win=1,
+            donated_troops_total=donated_troops_total,
+            donated_gold_total=donated_gold_total,
+            donation_action_count=donation_action_count,
+            attack_troops_total=attack_troops_total,
+            attack_action_count=attack_action_count,
+        )
+
+    for index in range(5):
+        add_team_game(
+            "Frontmain",
+            "frontmain",
+            index,
+            attack_troops_total=75_000,
+            attack_action_count=1,
+        )
+    add_team_game(
+        "Frontmain",
+        "frontmain",
+        5,
+        donated_troops_total=25_000,
+        donation_action_count=1,
+        attack_troops_total=75_000,
+        attack_action_count=1,
+    )
+
+    for index in range(6, 11):
+        add_team_game(
+            "Backmain",
+            "backmain",
+            index,
+            donated_troops_total=50_000,
+            donated_gold_total=200_000,
+            donation_action_count=2,
+        )
+
+    add_team_game(
+        "Mixmain",
+        "mixmain",
+        11,
+        attack_troops_total=75_000,
+        attack_action_count=1,
+    )
+    add_team_game(
+        "Mixmain",
+        "mixmain",
+        12,
+        attack_troops_total=75_000,
+        attack_action_count=1,
+    )
+    add_team_game(
+        "Mixmain",
+        "mixmain",
+        13,
+        donated_troops_total=60_000,
+        donation_action_count=1,
+    )
+    add_team_game(
+        "Mixmain",
+        "mixmain",
+        14,
+        donated_troops_total=60_000,
+        donation_action_count=1,
+    )
+    add_team_game(
+        "Mixmain",
+        "mixmain",
+        15,
+        donated_troops_total=25_000,
+        donation_action_count=1,
+        attack_troops_total=75_000,
+        attack_action_count=1,
+    )
+
+    for index in range(16, 20):
+        add_team_game(
+            "Rookie",
+            "rookie",
+            index,
+            attack_troops_total=75_000,
+            attack_action_count=1,
+        )
+
+    refresh_guild_player_aggregates(guild)
+
+    frontmain = GuildPlayerAggregate.get(
+        GuildPlayerAggregate.normalized_username == "frontmain"
+    )
+    backmain = GuildPlayerAggregate.get(
+        GuildPlayerAggregate.normalized_username == "backmain"
+    )
+    mixmain = GuildPlayerAggregate.get(GuildPlayerAggregate.normalized_username == "mixmain")
+    rookie = GuildPlayerAggregate.get(GuildPlayerAggregate.normalized_username == "rookie")
+
+    assert frontmain.role_label == "Frontliner"
+    assert backmain.role_label == "Backliner"
+    assert mixmain.role_label == "Hybrid"
+    assert rookie.role_label == "Flexible"
+
+    rows = {
+        row["normalized_username"]: row
+        for row in build_leaderboard_response(guild, "team")["rows"]
+    }
+    assert rows["frontmain"]["role_label"] == "Frontliner"
+    assert rows["backmain"]["role_label"] == "Backliner"
+    assert rows["mixmain"]["role_label"] == "Hybrid"
+    assert rows["rookie"]["role_label"] == "Flexible"
