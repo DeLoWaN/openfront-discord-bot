@@ -271,7 +271,11 @@ def _upsert_observed_game(payload: dict[str, Any]) -> ObservedGame:
     return game
 
 
-def ingest_game_payload(payload: dict[str, Any]) -> GameIngestionSummary:
+def ingest_game_payload(
+    payload: dict[str, Any],
+    *,
+    refresh_aggregates: bool = True,
+) -> GameIngestionSummary:
     info = payload.get("info", payload)
     if _extract_game_type(info) != "PUBLIC":
         return GameIngestionSummary(_extract_game_id(payload), set(), 0)
@@ -335,6 +339,10 @@ def ingest_game_payload(payload: dict[str, Any]) -> GameIngestionSummary:
     GameParticipant.delete().where(GameParticipant.game == game).execute()
     for row in matched_rows:
         GameParticipant.create(game=game, **row)
+
+    if refresh_aggregates:
+        for guild_id in matched_guild_ids:
+            refresh_guild_player_aggregates(guild_id)
 
     return GameIngestionSummary(
         _field_str(game.openfront_game_id),
@@ -681,7 +689,7 @@ async def backfill_public_games_async(
             game_id,
             include_turns=include_turns,
         )
-        ingestion_summary = ingest_game_payload(payload)
+        ingestion_summary = ingest_game_payload(payload, refresh_aggregates=False)
         if ingestion_summary.matched_guild_ids:
             games_ingested += 1
             affected_guild_ids.update(ingestion_summary.matched_guild_ids)

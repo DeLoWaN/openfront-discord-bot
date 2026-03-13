@@ -99,6 +99,39 @@ def test_ingest_game_payload_persists_guild_relevant_participants_and_aggregates
     }
 
 
+def test_ingest_game_payload_refreshes_leaderboard_aggregates_immediately(tmp_path):
+    from src.services.guild_sites import provision_guild_site
+    from src.services.guild_stats_api import build_leaderboard_response
+    from src.services.openfront_ingestion import ingest_game_payload
+
+    setup_shared_database(tmp_path)
+    guild = provision_guild_site(
+        slug="north",
+        subdomain="north",
+        display_name="North",
+        clan_tags=["NU"],
+    )
+
+    ingest_game_payload(
+        {
+            "info": {
+                "gameID": "instant-refresh-1",
+                "config": {"gameType": "Public", "gameMode": "Team"},
+                "winner": ["team", "Team 1", "c1"],
+                "players": [
+                    {"clientID": "c1", "username": "[NU] Ace", "clanTag": None},
+                ],
+            }
+        }
+    )
+
+    rows = build_leaderboard_response(guild, "team")["rows"]
+
+    assert len(rows) == 1
+    assert rows[0]["normalized_username"] == "ace"
+    assert rows[0]["win_count"] == 1
+
+
 def test_backfill_public_games_fetches_and_ingests_matching_games(tmp_path):
     from src.data.shared.models import GameParticipant, ObservedGame
     from src.services.guild_sites import provision_guild_site

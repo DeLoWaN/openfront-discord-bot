@@ -548,7 +548,7 @@ async def hydrate_backfill_run(
                 )
                 cache_entry = _cache_payload(backfill_game.openfront_game_id, payload)
             assert cache_entry is not None
-            summary = ingest_game_payload(payload)
+            summary = ingest_game_payload(payload, refresh_aggregates=False)
             _record_success(run, backfill_game, cache_entry, summary.matched_guild_ids)
             return HydrationResult("completed", summary.matched_guild_ids)
 
@@ -645,7 +645,7 @@ def replay_backfill_run(
             _record_failure(run, backfill_game, str(exc), cache_failure=True)
             continue
         assert _cache_entry is not None
-        summary = ingest_game_payload(payload)
+        summary = ingest_game_payload(payload, refresh_aggregates=False)
         _record_success(
             run,
             backfill_game,
