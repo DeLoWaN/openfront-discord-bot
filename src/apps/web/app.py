@@ -362,6 +362,14 @@ def create_app(
             f'<td colspan="{len(columns) + 1}">No guild players have been aggregated yet.</td>'
             "</tr>"
         )
+        overall_scoring_summary = ""
+        if resolved_view == "overall":
+            overall_scoring_summary = (
+                "<section>"
+                "<p><strong>How scoring works:</strong> "
+                f'{escape(scoring["overall_summary"])}</p>'
+                "</section>"
+            )
         body = f"""
         <header>
           <p>{escape(guild.display_name)}</p>
@@ -373,9 +381,7 @@ def create_app(
           <a class="nav-link" href="/players">Browse players</a>
           {nav_links}
         </nav>
-        <section>
-          <p><strong>How scoring works:</strong> {escape(scoring["overall_summary"])}</p>
-        </section>
+        {overall_scoring_summary}
         <table>
           <thead>
             <tr>{header_cells}</tr>
