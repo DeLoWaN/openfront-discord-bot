@@ -1,0 +1,27 @@
+services:
+  mariadb:
+    image: mariadb:11.4
+    container_name: openfront-mariadb
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:-root-change-me}
+      MARIADB_DATABASE: ${MARIADB_DATABASE:-openfront}
+      MARIADB_USER: ${MARIADB_USER:-openfront}
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD:-change-me}
+      MARIADB_AUTO_UPGRADE: "1"
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    ports:
+      - "${MARIADB_PORT:-3306}:3306"
+    volumes:
+      - mariadb_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+volumes:
+  mariadb_data:

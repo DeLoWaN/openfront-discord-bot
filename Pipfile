@@ -7,12 +7,22 @@ peewee = "*"
 PyYAML = "*"
 python-dotenv = "*"
 "discord.py" = "*"
+fastapi = "*"
+httpx = "*"
+itsdangerous = "*"
+PyMySQL = "*"
+uvicorn = "*"
 
 [dev-packages]
 ruff = "*"
 basedpyright = "*"
 pytest = "*"
 pytest-asyncio = "*"
+
+[scripts]
+typecheck = "basedpyright"
+lint = "ruff check ."
+test = "pytest -q"
 
 [pipenv]
 allow_prereleases = false

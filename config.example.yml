@@ -3,3 +3,16 @@ central_database_path: "central.db"
 log_level: "INFO" # Options: CRITICAL, ERROR, WARNING, INFO, DEBUG
 sync_interval_hours: 24 # Background sync cadence for all guilds (1-24 hours)
 results_lobby_poll_seconds: 2 # Poll interval for public lobby tracking (seconds)
+mariadb:
+  database: "openfront"
+  user: "openfront"
+  password: "change-me"
+  host: "127.0.0.1"
+  port: 3306
+  charset: "utf8mb4"
+discord_oauth:
+  client_id: "discord-client-id"
+  client_secret: "discord-client-secret"
+  redirect_uri: "https://guild.example.com/auth/discord/callback"
+  session_secret: "replace-with-a-long-random-secret"
+  scope: "identify"

@@ -1,0 +1,146 @@
+# Historical Backfill Pipeline Specification
+
+## ADDED Requirements
+
+### Requirement: Discover historical team games by tracked clan sessions
+
+The system SHALL discover historical public team games for guild backfill by
+querying clan sessions for each tracked guild clan tag within the requested
+backfill range. The system SHALL extract unique `gameId` values from those
+session rows and enqueue them for hydration without relying on a global team
+game scan.
+
+#### Scenario: Shared game id appears in multiple clan session streams
+
+- **WHEN** session rows from two or more tracked clan tags reference the same
+  `gameId`
+- **THEN** the system enqueues one hydration work item for that game id
+
+#### Scenario: Backfill range spans multiple clan-session windows
+
+- **WHEN** a requested backfill range exceeds one discovery window
+- **THEN** the system continues clan-session discovery across successive
+  windows until the full range has been covered
+
+### Requirement: Apply historical date filters by game start time
+
+The system SHALL interpret historical backfill `start` and `end` boundaries
+using game start time, not game end time. Clan-session discovery SHALL use each
+row's `gameStart`, and public-games discovery SHALL use each row's `start`
+timestamp.
+
+#### Scenario: Game starts inside range and ends after range
+
+- **WHEN** a game's start timestamp falls inside the requested backfill range
+- **THEN** the system treats that game as in range even if the game ends later
+
+#### Scenario: Game starts before range and ends inside range
+
+- **WHEN** a game's start timestamp falls before the requested backfill range
+- **THEN** the system treats that game as out of range even if the game ends
+  within the requested window
+
+### Requirement: Discover historical FFA games by public games windows
+
+The system SHALL discover historical Free For All games by querying
+`/public/games` in API-compliant time windows, paging through the full list,
+and selecting only rows whose list metadata reports `mode` as `Free For All`.
+The system SHALL enqueue only those FFA game ids for hydration.
+
+#### Scenario: Team game appears in public games discovery
+
+- **WHEN** a public games list row reports `mode` as `Team`
+- **THEN** the system does not enqueue that row for the FFA hydration stream
+
+#### Scenario: Free For All game appears in public games discovery
+
+- **WHEN** a public games list row reports `mode` as `Free For All`
+- **THEN** the system enqueues that game id for hydration
+
+### Requirement: Persist resumable backfill progress
+
+The system SHALL persist backfill runs and discovery cursor state so an
+interrupted historical backfill can resume from the last saved position instead
+of restarting from the beginning of the requested range.
+
+#### Scenario: Worker stops mid-backfill
+
+- **WHEN** a historical backfill run stops after some discovery windows or
+  pages have completed
+- **THEN** a resumed run continues from the saved cursor state and preserves
+  previously queued work
+
+#### Scenario: Operator requests backfill status
+
+- **WHEN** an operator inspects a historical backfill run
+- **THEN** the system reports persisted progress counters and cursor positions
+  for that run
+
+### Requirement: Deduplicate queued work by game id
+
+The system SHALL deduplicate discovered historical work by OpenFront game id so
+the same game is not scheduled multiple times across overlapping discovery
+windows, multiple clan tags, or resumed runs.
+
+#### Scenario: Same game discovered twice in one run
+
+- **WHEN** two discovery steps emit the same OpenFront game id
+- **THEN** the system retains one queued hydration work item for that game id
+
+#### Scenario: Resumed run encounters an already queued game
+
+- **WHEN** a resumed backfill step rediscovers a game id that is already
+  queued or completed for that run
+- **THEN** the system does not create a duplicate hydration work item
+
+### Requirement: Hydrate discovered games with bounded concurrency
+
+The system SHALL fetch queued turn-free game details through a bounded worker
+pool rather than a single serial loop, and it SHALL track per-item success and
+failure state without aborting the entire run on one transient error.
+
+#### Scenario: Queued game hydration succeeds
+
+- **WHEN** a queued game detail fetch succeeds
+- **THEN** the system marks the work item complete and makes the payload
+  available for ingestion
+
+#### Scenario: Queued game hydration fails transiently
+
+- **WHEN** a queued game detail fetch encounters a transient upstream failure
+- **THEN** the system records the failure and leaves the work item eligible for
+  retry according to worker policy
+
+### Requirement: Refresh guild aggregates from affected backfill results
+
+The system SHALL refresh guild player aggregates only for guilds affected by
+hydrated historical games, and it SHALL perform those refreshes in batches
+instead of once per hydrated game.
+
+#### Scenario: Hydrated game affects one guild
+
+- **WHEN** ingestion of a hydrated historical game matches one guild
+- **THEN** that guild is added to the affected refresh set for batched
+  aggregate refresh
+
+#### Scenario: Hydrated game affects multiple guilds
+
+- **WHEN** ingestion of a hydrated historical game matches more than one guild
+- **THEN** each matched guild is added to the affected refresh set for batched
+  aggregate refresh
+
+### Requirement: Emit progress logs for long historical runs
+
+The system SHALL emit operator-readable progress logs for historical backfill
+runs, including run start, periodic progress, cursor advancement, retry or
+failure events, and completion summaries.
+
+#### Scenario: Historical run is in progress
+
+- **WHEN** a long-running backfill continues across multiple windows or batches
+- **THEN** the worker logs progress counters and the current cursor or window
+
+#### Scenario: Historical run completes or fails
+
+- **WHEN** a historical backfill run finishes or terminates with an error
+- **THEN** the worker logs the final run outcome and summary counters

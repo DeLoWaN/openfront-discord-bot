@@ -38,6 +38,12 @@ from .models import (
     utcnow_naive,
 )
 from .openfront import OpenFrontClient, OpenFrontError
+from .services.shared_bot_bridge import (
+    bootstrap_shared_backend,
+    merge_shared_openfront_username_index,
+    mirror_legacy_bot_link,
+    mirror_legacy_bot_unlink,
+)
 from .wins import (
     compute_wins_sessions_since_link_from_sessions,
     compute_wins_sessions_with_clan_from_sessions,
@@ -131,7 +137,7 @@ def build_openfront_username_index(models: GuildModels) -> Dict[str, List[int]]:
         if not username:
             continue
         index.setdefault(username, []).append(user.discord_user_id)
-    return index
+    return merge_shared_openfront_username_index(index)
 
 
 def extract_game_id(entry: Dict[str, Any]) -> Optional[str]:
@@ -388,6 +394,7 @@ class CountingBot(commands.Bot):
         self.guild_data_dir = Path("guild_data")
         self.guild_data_dir.mkdir(parents=True, exist_ok=True)
         init_central_db(config.central_database_path)
+        bootstrap_shared_backend(config)
         self.sync_queue: asyncio.Queue[int] = asyncio.Queue()
         self.role_queue: asyncio.Queue[Any] = asyncio.Queue()
         self.sync_worker_tasks: list[asyncio.Task[None]] = []
@@ -1425,6 +1432,12 @@ async def setup_commands(bot: CountingBot):
                 exc,
             )
         record_audit(ctx.models, interaction.user.id, "link", {"player_id": player_id})
+        await mirror_legacy_bot_link(
+            discord_user_id=interaction.user.id,
+            display_name=getattr(interaction.user, "display_name", None),
+            player_id=player_id,
+            client=bot.client,
+        )
         lines = [
             f"Linked to player `{player_id}`. Last OpenFront username: `{openfront_username or 'unknown'}`"
         ]
@@ -1450,6 +1463,7 @@ async def setup_commands(bot: CountingBot):
         ctx.models.User.delete().where(
             ctx.models.User.discord_user_id == interaction.user.id
         ).execute()
+        mirror_legacy_bot_unlink(interaction.user.id)
         record_audit(ctx.models, interaction.user.id, "unlink", {})
         await interaction.response.send_message("Unlinked.", ephemeral=True)
 
@@ -1937,6 +1951,12 @@ async def setup_commands(bot: CountingBot):
             interaction.user.id,
             "link_override",
             {"user": user.id, "player_id": player_id},
+        )
+        await mirror_legacy_bot_link(
+            discord_user_id=user.id,
+            display_name=getattr(user, "display_name", None),
+            player_id=player_id,
+            client=bot.client,
         )
         await interaction.response.send_message(
             f"Linked {user.display_name} to {player_id}", ephemeral=True
