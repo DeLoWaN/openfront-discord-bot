@@ -1,8 +1,7 @@
 # historical-backfill-cli Specification
 
-## Purpose
-TBD - created by archiving change add-resumable-hybrid-backfill. Update Purpose after archive.
-## Requirements
+## MODIFIED Requirements
+
 ### Requirement: Start historical backfill runs from an external CLI
 
 The system SHALL provide an external CLI command that starts a historical
@@ -105,4 +104,3 @@ failures instead of silently fetching new data.
 - **WHEN** an operator requests replay for a historical range or run with no
   cached game payloads
 - **THEN** the CLI fails instead of silently performing a new crawl
-

@@ -33,6 +33,10 @@ class SharedBaseModel(Model):
         database = shared_database
 
 
+class LongTextField(TextField):
+    field_type = "LONGTEXT"
+
+
 class Guild(SharedBaseModel):
     id = AutoField()
     slug = CharField(unique=True)
@@ -113,6 +117,9 @@ class BackfillRun(SharedBaseModel):
     ingested_count = IntegerField(default=0)
     matched_count = IntegerField(default=0)
     failed_count = IntegerField(default=0)
+    skipped_known_count = IntegerField(default=0)
+    replayed_count = IntegerField(default=0)
+    cache_failure_count = IntegerField(default=0)
     refreshed_guild_count = IntegerField(default=0)
 
     class Meta:
@@ -144,8 +151,8 @@ class CachedOpenFrontGame(SharedBaseModel):
     started_at = DateTimeField(null=True)
     ended_at = DateTimeField(null=True)
     fetched_at = DateTimeField(default=utcnow_naive)
-    payload_json = TextField()
-    turn_payload_json = TextField(null=True)
+    payload_json = LongTextField()
+    turn_payload_json = LongTextField(null=True)
 
     class Meta:
         table_name = "cached_openfront_games"
@@ -159,6 +166,7 @@ class BackfillGame(SharedBaseModel):
     started_at = DateTimeField(null=True)
     status = CharField(default="pending")
     attempts = IntegerField(default=0)
+    matched_guild_count = IntegerField(default=0)
     last_error = TextField(null=True)
     cache_entry = ForeignKeyField(
         CachedOpenFrontGame,

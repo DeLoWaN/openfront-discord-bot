@@ -46,6 +46,16 @@ class IngestedWebDataResetSummary:
         )
 
 
+@dataclass(frozen=True)
+class HydrationResult:
+    outcome: str
+    matched_guild_ids: set[int]
+
+
+class CachePayloadError(ValueError):
+    pass
+
+
 def _parse_api_datetime(value: str | None) -> datetime | None:
     if not value:
         return None
@@ -166,6 +176,15 @@ def _cache_payload(
     return cache_entry
 
 
+def _lookup_cache_entry(backfill_game: BackfillGame) -> CachedOpenFrontGame | None:
+    cache_entry = backfill_game.cache_entry
+    if cache_entry is None:
+        cache_entry = CachedOpenFrontGame.get_or_none(
+            CachedOpenFrontGame.openfront_game_id == backfill_game.openfront_game_id
+        )
+    return cache_entry
+
+
 def reset_ingested_web_data() -> IngestedWebDataResetSummary:
     with shared_database.atomic():
         game_participants = GameParticipant.delete().execute()
@@ -190,16 +209,17 @@ def reset_ingested_web_data() -> IngestedWebDataResetSummary:
 def _get_payload_from_cache(
     backfill_game: BackfillGame,
 ) -> tuple[CachedOpenFrontGame | None, dict[str, object] | None]:
-    cache_entry = backfill_game.cache_entry
-    if cache_entry is None:
-        cache_entry = CachedOpenFrontGame.get_or_none(
-            CachedOpenFrontGame.openfront_game_id == backfill_game.openfront_game_id
-        )
+    cache_entry = _lookup_cache_entry(backfill_game)
     if cache_entry is None:
         return None, None
-    if cache_entry.turn_payload_json:
-        return cache_entry, json.loads(cache_entry.turn_payload_json)
-    return cache_entry, json.loads(cache_entry.payload_json)
+    try:
+        if cache_entry.turn_payload_json:
+            return cache_entry, json.loads(cache_entry.turn_payload_json)
+        return cache_entry, json.loads(cache_entry.payload_json)
+    except (TypeError, ValueError) as exc:
+        raise CachePayloadError(
+            f"Unreadable cached payload for {backfill_game.openfront_game_id}: {exc}"
+        ) from exc
 
 
 def _refresh_guild_batch(affected_guild_ids: set[int]) -> int:
@@ -208,6 +228,103 @@ def _refresh_guild_batch(affected_guild_ids: set[int]) -> int:
         refresh_guild_player_aggregates(guild_id)
         refreshed += 1
     return refreshed
+
+
+def _clear_failure_counter(run: BackfillRun, previous_status: str) -> None:
+    if previous_status == "failed" and run.failed_count > 0:
+        run.failed_count -= 1
+    if previous_status == "cache_failed" and run.cache_failure_count > 0:
+        run.cache_failure_count -= 1
+
+
+def _record_skipped_known(run: BackfillRun, backfill_game: BackfillGame) -> None:
+    _clear_failure_counter(run, backfill_game.status)
+    if backfill_game.status != "skipped_known":
+        run.skipped_known_count += 1
+    backfill_game.status = "skipped_known"
+    backfill_game.last_error = None
+    backfill_game.matched_guild_count = 0
+    backfill_game.save()
+
+
+def _record_failure(
+    run: BackfillRun,
+    backfill_game: BackfillGame,
+    error: str,
+    *,
+    cache_failure: bool = False,
+) -> None:
+    next_status = "cache_failed" if cache_failure else "failed"
+    if backfill_game.status != next_status:
+        _clear_failure_counter(run, backfill_game.status)
+        if cache_failure:
+            run.cache_failure_count += 1
+        else:
+            run.failed_count += 1
+    backfill_game.status = next_status
+    backfill_game.last_error = error
+    backfill_game.matched_guild_count = 0
+    backfill_game.save()
+
+
+def _record_success(
+    run: BackfillRun,
+    backfill_game: BackfillGame,
+    cache_entry: CachedOpenFrontGame,
+    matched_guild_ids: set[int],
+    *,
+    replay: bool = False,
+) -> None:
+    _clear_failure_counter(run, backfill_game.status)
+    backfill_game.cache_entry = cache_entry
+    backfill_game.status = "completed"
+    backfill_game.last_error = None
+    backfill_game.matched_guild_count = len(matched_guild_ids)
+    backfill_game.save()
+    run.cached_count += 1
+    run.ingested_count += 1
+    if matched_guild_ids:
+        run.matched_count += 1
+    if replay:
+        run.replayed_count += 1
+
+
+def _has_prior_successful_hydration(backfill_game: BackfillGame) -> bool:
+    return (
+        BackfillGame.select()
+        .where(
+            (BackfillGame.openfront_game_id == backfill_game.openfront_game_id)
+            & (BackfillGame.run != backfill_game.run)
+            & (BackfillGame.status == "completed")
+        )
+        .exists()
+    )
+
+
+def _should_skip_known_history(backfill_game: BackfillGame) -> bool:
+    if not _has_prior_successful_hydration(backfill_game):
+        return False
+    try:
+        cache_entry, payload = _get_payload_from_cache(backfill_game)
+    except CachePayloadError:
+        return False
+    return cache_entry is not None and payload is not None
+
+
+def _finalize_run(run: BackfillRun) -> None:
+    remaining = (
+        BackfillGame.select()
+        .where((BackfillGame.run == run) & (BackfillGame.status == "pending"))
+        .count()
+    )
+    if remaining == 0:
+        run.status = (
+            "completed_with_failures"
+            if run.failed_count or run.cache_failure_count
+            else "completed"
+        )
+        run.completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    run.save()
 
 
 async def _fetch_game_payload(
@@ -397,7 +514,7 @@ async def hydrate_backfill_run(
         BackfillGame.select()
         .where(
             (BackfillGame.run == run)
-            & (BackfillGame.status.in_(("pending", "failed")))
+            & (BackfillGame.status.in_(("pending", "failed", "cache_failed")))
         )
         .order_by(BackfillGame.id)
     )
@@ -406,8 +523,22 @@ async def hydrate_backfill_run(
     async def process_game(game_id: int):
         async with semaphore:
             backfill_game = BackfillGame.get_by_id(game_id)
+            if _should_skip_known_history(backfill_game):
+                _record_skipped_known(run, backfill_game)
+                return HydrationResult("skipped_known", set())
             backfill_game.attempts += 1
-            cache_entry, payload = _get_payload_from_cache(backfill_game)
+            backfill_game.save()
+            try:
+                cache_entry, payload = _get_payload_from_cache(backfill_game)
+            except CachePayloadError as exc:
+                LOGGER.warning(
+                    "run=%s cache_repair game=%s reason=%s",
+                    run.id,
+                    backfill_game.openfront_game_id,
+                    exc,
+                )
+                cache_entry = None
+                payload = None
             if payload is None:
                 include_turns = backfill_game.source_type == "team"
                 payload = await _fetch_game_payload(
@@ -418,11 +549,8 @@ async def hydrate_backfill_run(
                 cache_entry = _cache_payload(backfill_game.openfront_game_id, payload)
             assert cache_entry is not None
             summary = ingest_game_payload(payload)
-            backfill_game.cache_entry = cache_entry
-            backfill_game.status = "completed"
-            backfill_game.last_error = None
-            backfill_game.save()
-            return summary.matched_guild_ids
+            _record_success(run, backfill_game, cache_entry, summary.matched_guild_ids)
+            return HydrationResult("completed", summary.matched_guild_ids)
 
     affected_guild_ids: set[int] = set()
     processed_successes = 0
@@ -436,16 +564,12 @@ async def hydrate_backfill_run(
         for backfill_game, result in zip(batch, results):
             if isinstance(result, Exception):
                 failed_game = BackfillGame.get_by_id(backfill_game.id)
-                failed_game.status = "failed"
-                failed_game.last_error = str(result)
-                failed_game.save()
-                run.failed_count += 1
+                _record_failure(run, failed_game, str(result))
                 continue
-            run.cached_count += 1
-            run.ingested_count += 1
-            if result:
-                run.matched_count += 1
-                affected_guild_ids.update(result)
+            if result.outcome == "skipped_known":
+                continue
+            if result.matched_guild_ids:
+                affected_guild_ids.update(result.matched_guild_ids)
             processed_successes += 1
             if (
                 processed_successes % max(1, refresh_batch_size) == 0
@@ -453,37 +577,34 @@ async def hydrate_backfill_run(
             ):
                 run.refreshed_guild_count += _refresh_guild_batch(affected_guild_ids)
                 affected_guild_ids.clear()
+        run.save()
         LOGGER.info(
-            "run=%s hydration_progress processed=%s total=%s cached=%s ingested=%s matched=%s failed=%s",
+            "run=%s hydration_progress processed=%s total=%s cached=%s ingested=%s matched=%s skipped=%s failed=%s cache_failed=%s aggregate_refreshes=%s",
             run.id,
             min(offset + len(batch), len(pending_games)),
             len(pending_games),
             run.cached_count,
             run.ingested_count,
             run.matched_count,
+            run.skipped_known_count,
             run.failed_count,
+            run.cache_failure_count,
+            run.refreshed_guild_count,
         )
 
     if affected_guild_ids:
         run.refreshed_guild_count += _refresh_guild_batch(affected_guild_ids)
-
-    remaining = (
-        BackfillGame.select()
-        .where((BackfillGame.run == run) & (BackfillGame.status == "pending"))
-        .count()
-    )
-    if remaining == 0:
-        run.status = "completed"
-        run.completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
-    run.save()
+    _finalize_run(run)
     LOGGER.info(
-        "run=%s hydration_complete status=%s cached=%s ingested=%s matched=%s failed=%s refreshed=%s",
+        "run=%s hydration_complete status=%s cached=%s ingested=%s matched=%s skipped=%s failed=%s cache_failed=%s aggregate_refreshes=%s",
         run.id,
         run.status,
         run.cached_count,
         run.ingested_count,
         run.matched_count,
+        run.skipped_known_count,
         run.failed_count,
+        run.cache_failure_count,
         run.refreshed_guild_count,
     )
     return BackfillRun.get_by_id(run_id)
@@ -495,28 +616,44 @@ def replay_backfill_run(
     refresh_batch_size: int = 100,
 ) -> BackfillRun:
     run = BackfillRun.get_by_id(run_id)
+    run.status = "running"
+    if run.started_at is None:
+        run.started_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    run.save()
     affected_guild_ids: set[int] = set()
     processed = 0
-    queued_games = (
+    queued_games = list(
         BackfillGame.select()
         .where(BackfillGame.run == run)
         .order_by(BackfillGame.id)
     )
+    if queued_games and not any(_lookup_cache_entry(game) is not None for game in queued_games):
+        raise ValueError(f"No cached payload available for backfill run {run_id}")
     for backfill_game in queued_games:
-        cache_entry, payload = _get_payload_from_cache(backfill_game)
-        if cache_entry is None or payload is None:
-            raise ValueError(
-                f"No cached payload available for {backfill_game.openfront_game_id}"
+        cache_entry = _lookup_cache_entry(backfill_game)
+        if cache_entry is None:
+            _record_failure(
+                run,
+                backfill_game,
+                f"No cached payload available for {backfill_game.openfront_game_id}",
+                cache_failure=True,
             )
+            continue
+        try:
+            _cache_entry, payload = _get_payload_from_cache(backfill_game)
+        except CachePayloadError as exc:
+            _record_failure(run, backfill_game, str(exc), cache_failure=True)
+            continue
+        assert _cache_entry is not None
         summary = ingest_game_payload(payload)
-        backfill_game.cache_entry = cache_entry
-        backfill_game.status = "completed"
-        backfill_game.last_error = None
-        backfill_game.save()
-        run.cached_count += 1
-        run.ingested_count += 1
+        _record_success(
+            run,
+            backfill_game,
+            _cache_entry,
+            summary.matched_guild_ids,
+            replay=True,
+        )
         if summary.matched_guild_ids:
-            run.matched_count += 1
             affected_guild_ids.update(summary.matched_guild_ids)
         processed += 1
         if processed % max(1, refresh_batch_size) == 0 and affected_guild_ids:
@@ -525,5 +662,5 @@ def replay_backfill_run(
 
     if affected_guild_ids:
         run.refreshed_guild_count += _refresh_guild_batch(affected_guild_ids)
-    run.save()
+    _finalize_run(run)
     return BackfillRun.get_by_id(run_id)

@@ -237,3 +237,36 @@ def test_historical_backfill_cli_can_reset_ingested_web_data(
     assert "deleted_backfill_runs=1" in reset_output
     assert "deleted_observed_games=1" in reset_output
     assert "deleted_guild_player_aggregates=1" in reset_output
+
+
+def test_historical_backfill_cli_status_reports_overlap_and_cache_counters(
+    monkeypatch,
+    tmp_path,
+    capsys,
+):
+    from src.data.shared.models import BackfillRun
+
+    backfill_cli = patch_backfill_cli_runtime(monkeypatch, tmp_path)
+    run = BackfillRun.create(
+        requested_start=backfill_cli._parse_cli_datetime("2026-03-01"),
+        requested_end=backfill_cli._parse_cli_datetime("2026-03-03"),
+        status="completed_with_failures",
+        discovered_count=12,
+        cached_count=7,
+        ingested_count=7,
+        matched_count=3,
+        failed_count=2,
+        refreshed_guild_count=5,
+        skipped_known_count=4,
+        replayed_count=6,
+        cache_failure_count=1,
+    )
+
+    assert backfill_cli.main(["status", "--run-id", str(run.id)]) == 0
+    output = capsys.readouterr().out
+
+    assert "status=completed_with_failures" in output
+    assert "skipped=4" in output
+    assert "replayed=6" in output
+    assert "cache_failed=1" in output
+    assert "aggregate_refreshes=5" in output

@@ -1,10 +1,7 @@
 # openfront-game-cache Specification
 
-## Purpose
+## MODIFIED Requirements
 
-Define how hydrated OpenFront game payloads are cached for replay, recovery,
-and later aggregate rebuilds.
-## Requirements
 ### Requirement: Cache turn-free game details locally
 
 The system SHALL persist the raw payload from `/public/game/:id?turns=false`
@@ -84,25 +81,3 @@ cache-integrity failure instead of silently performing a new crawl.
 - **WHEN** replay attempts to use a cached game payload that is unreadable
 - **THEN** the system reports a cache-integrity failure and does not silently
   issue a new upstream fetch
-
-### Requirement: Keep cached games separate from guild-relevant observations
-
-The system SHALL store raw cached game details separately from guild-relevant
-observed game records so cached but currently irrelevant games do not
-contribute to guild stats unless later ingestion determines that they match a
-guild.
-
-#### Scenario: Cached irrelevant game remains outside leaderboard data
-
-- **WHEN** a cached game has no participants matching any tracked guild clan
-  tag
-- **THEN** the game remains available for later replay but does not create
-  guild leaderboard input rows
-
-#### Scenario: Replay later makes a cached game relevant
-
-- **WHEN** later replay rules or tracked clan tags cause a cached game to match
-  a guild
-- **THEN** the system ingests that cached payload into the guild-relevant
-  observation tables without requiring a new upstream fetch
-

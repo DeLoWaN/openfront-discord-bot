@@ -17,10 +17,48 @@ def _existing_columns(database, table_name: str) -> set[str]:
         return {row[1] for row in rows}
 
 
+def _column_metadata(database, table_name: str) -> dict[str, object]:
+    try:
+        return {column.name: column for column in database.get_columns(table_name)}
+    except Exception:
+        return {}
+
+
+def _normalized_data_type(column: object) -> str:
+    data_type = getattr(column, "data_type", "") or getattr(column, "column_type", "")
+    return str(data_type).strip().upper()
+
+
+def _supports_modify_column(database) -> bool:
+    module_name = type(database).__module__.lower()
+    class_name = type(database).__name__.lower()
+    return "sqlite" not in module_name and "sqlite" not in class_name
+
+
 def ensure_column(database, table_name: str, column_name: str, ddl_sql: str) -> None:
     if column_name in _existing_columns(database, table_name):
         return
     database.execute_sql(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {ddl_sql}")
+
+
+def ensure_column_type(
+    database,
+    table_name: str,
+    column_name: str,
+    ddl_sql: str,
+    expected_types: set[str],
+) -> None:
+    if not _supports_modify_column(database):
+        return
+    metadata = _column_metadata(database, table_name)
+    column = metadata.get(column_name)
+    if column is None:
+        return
+    if _normalized_data_type(column) in {value.upper() for value in expected_types}:
+        return
+    database.execute_sql(
+        f"ALTER TABLE {table_name} MODIFY COLUMN {column_name} {ddl_sql}"
+    )
 
 
 def run_shared_migrations(database) -> None:
@@ -40,7 +78,11 @@ def run_shared_migrations(database) -> None:
     ensure_column(database, site_user_table, "last_login_at", "DATETIME NULL")
 
     additive_columns = (
-        ("cached_openfront_games", "turn_payload_json", "TEXT NULL"),
+        ("backfill_runs", "skipped_known_count", "INTEGER NOT NULL DEFAULT 0"),
+        ("backfill_runs", "replayed_count", "INTEGER NOT NULL DEFAULT 0"),
+        ("backfill_runs", "cache_failure_count", "INTEGER NOT NULL DEFAULT 0"),
+        ("backfill_games", "matched_guild_count", "INTEGER NOT NULL DEFAULT 0"),
+        ("cached_openfront_games", "turn_payload_json", "LONGTEXT NULL"),
         ("game_participants", "attack_troops_total", "BIGINT NOT NULL DEFAULT 0"),
         ("game_participants", "attack_action_count", "INTEGER NOT NULL DEFAULT 0"),
         ("game_participants", "donated_troops_total", "BIGINT NOT NULL DEFAULT 0"),
@@ -85,6 +127,20 @@ def run_shared_migrations(database) -> None:
     )
     for table_name, column_name, ddl_sql in additive_columns:
         ensure_column(database, table_name, column_name, ddl_sql)
+    ensure_column_type(
+        database,
+        "cached_openfront_games",
+        "payload_json",
+        "LONGTEXT NOT NULL",
+        {"LONGTEXT"},
+    )
+    ensure_column_type(
+        database,
+        "cached_openfront_games",
+        "turn_payload_json",
+        "LONGTEXT NULL",
+        {"LONGTEXT"},
+    )
 
 
 def bootstrap_shared_schema(database=None, models: Iterable[type] = SHARED_MODELS) -> None:

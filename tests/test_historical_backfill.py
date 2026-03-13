@@ -418,7 +418,8 @@ def test_worker_runtime_backfill_and_resume_use_durable_runs(tmp_path):
     resumed_run = asyncio.run(worker.resume_backfill(resumed_run.id))
 
     assert resumed_run.status == "completed"
-    assert resumed_run.ingested_count == 2
+    assert resumed_run.ingested_count == 1
+    assert resumed_run.skipped_known_count == 1
 
 
 def test_hydrate_backfill_run_emits_progress_logs(tmp_path, caplog):
@@ -470,6 +471,164 @@ def test_hydrate_backfill_run_emits_progress_logs(tmp_path, caplog):
     messages = [record.message for record in caplog.records]
     assert any("hydration_progress" in message for message in messages)
     assert any("hydration_complete" in message for message in messages)
+    assert any("skipped=0" in message for message in messages)
+    assert any("cache_failed=0" in message for message in messages)
+    assert any("aggregate_refreshes=" in message for message in messages)
+
+
+def test_hydrate_backfill_run_skips_games_completed_in_earlier_runs(tmp_path):
+    from src.data.shared.models import BackfillGame, CachedOpenFrontGame
+    from src.services.historical_backfill import create_backfill_run, hydrate_backfill_run
+
+    setup_shared_database(tmp_path)
+
+    previous_run = create_backfill_run(
+        start=datetime(2026, 3, 1),
+        end=datetime(2026, 3, 5),
+    )
+    cache = CachedOpenFrontGame.create(
+        openfront_game_id="known-game",
+        game_type="PUBLIC",
+        mode_name="Team",
+        payload_json='{"info":{"gameID":"known-game","config":{"gameType":"Public","gameMode":"Team"},"winner":["team","Team 1","c1"],"players":[{"clientID":"c1","username":"Ace","clanTag":"XYZ"}]}}',
+        turn_payload_json='{"info":{"gameID":"known-game","config":{"gameType":"Public","gameMode":"Team"},"winner":["team","Team 1","c1"],"players":[{"clientID":"c1","username":"Ace","clanTag":"XYZ"}]},"turns":[]}',
+    )
+    BackfillGame.create(
+        run=previous_run,
+        openfront_game_id="known-game",
+        source_type="team",
+        status="completed",
+        cache_entry=cache,
+    )
+    current_run = create_backfill_run(
+        start=datetime(2026, 3, 1),
+        end=datetime(2026, 3, 5),
+    )
+    queued = BackfillGame.create(
+        run=current_run,
+        openfront_game_id="known-game",
+        source_type="team",
+        status="pending",
+    )
+
+    class FakeClient:
+        async def fetch_game(self, game_id):
+            raise AssertionError(f"should not fetch {game_id}")
+
+    hydrated = asyncio.run(hydrate_backfill_run(FakeClient(), current_run.id))
+    queued = BackfillGame.get_by_id(queued.id)
+
+    assert hydrated.status == "completed"
+    assert hydrated.ingested_count == 0
+    assert hydrated.skipped_known_count == 1
+    assert queued.status == "skipped_known"
+
+
+def test_hydrate_backfill_run_repairs_invalid_cached_payloads(tmp_path):
+    from src.data.shared.models import BackfillGame, CachedOpenFrontGame
+    from src.services.guild_sites import provision_guild_site
+    from src.services.historical_backfill import create_backfill_run, hydrate_backfill_run
+
+    setup_shared_database(tmp_path)
+    provision_guild_site(
+        slug="north",
+        subdomain="north",
+        display_name="North",
+        clan_tags=["NU"],
+    )
+
+    previous_run = create_backfill_run(
+        start=datetime(2026, 3, 1),
+        end=datetime(2026, 3, 5),
+    )
+    cache = CachedOpenFrontGame.create(
+        openfront_game_id="repair-game",
+        game_type="PUBLIC",
+        mode_name="Team",
+        payload_json='{"info":{"gameID":"repair-game"}}',
+        turn_payload_json='{"info": {"gameID":"repair-game"}, "turns": [',
+    )
+    BackfillGame.create(
+        run=previous_run,
+        openfront_game_id="repair-game",
+        source_type="team",
+        status="completed",
+        cache_entry=cache,
+    )
+    run = create_backfill_run(
+        start=datetime(2026, 3, 1),
+        end=datetime(2026, 3, 5),
+    )
+    queued = BackfillGame.create(
+        run=run,
+        openfront_game_id="repair-game",
+        source_type="team",
+        status="pending",
+        cache_entry=cache,
+    )
+
+    class FakeClient:
+        def __init__(self):
+            self.calls = []
+
+        async def fetch_game(self, game_id):
+            self.calls.append(game_id)
+            return {
+                "info": {
+                    "gameID": game_id,
+                    "config": {"gameType": "Public", "gameMode": "Team"},
+                    "winner": ["team", "Team 1", "c1"],
+                    "players": [
+                        {"clientID": "c1", "username": "[NU] Ace", "clanTag": None}
+                    ],
+                },
+                "turns": [],
+            }
+
+    client = FakeClient()
+    hydrated = asyncio.run(hydrate_backfill_run(client, run.id))
+    queued = BackfillGame.get_by_id(queued.id)
+    cache = CachedOpenFrontGame.get_by_id(cache.id)
+
+    assert client.calls == ["repair-game"]
+    assert hydrated.status == "completed"
+    assert hydrated.cache_failure_count == 0
+    assert queued.status == "completed"
+    assert cache.turn_payload_json.endswith('"turns": []}')
+
+
+def test_replay_backfill_run_reports_unreadable_cache_failures(tmp_path):
+    from src.data.shared.models import BackfillGame, CachedOpenFrontGame
+    from src.services.historical_backfill import create_backfill_run, replay_backfill_run
+
+    setup_shared_database(tmp_path)
+
+    run = create_backfill_run(
+        start=datetime(2026, 3, 1),
+        end=datetime(2026, 3, 5),
+    )
+    cache = CachedOpenFrontGame.create(
+        openfront_game_id="broken-cache",
+        game_type="PUBLIC",
+        mode_name="Team",
+        payload_json='{"info":{"gameID":"broken-cache"}}',
+        turn_payload_json='{"info":{"gameID":"broken-cache"}',
+    )
+    queued = BackfillGame.create(
+        run=run,
+        openfront_game_id="broken-cache",
+        source_type="team",
+        status="pending",
+        cache_entry=cache,
+    )
+
+    replayed = replay_backfill_run(run.id)
+    queued = BackfillGame.get_by_id(queued.id)
+
+    assert replayed.status == "completed_with_failures"
+    assert replayed.cache_failure_count == 1
+    assert queued.status == "cache_failed"
+    assert "cache" in queued.last_error.lower()
 
 
 def test_reset_ingested_web_data_clears_ingestion_tables_only(tmp_path):

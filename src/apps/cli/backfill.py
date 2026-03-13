@@ -46,7 +46,9 @@ def _run_summary(run: BackfillRun) -> str:
         f"requested_end={run.requested_end.isoformat()} "
         f"discovered={run.discovered_count} cached={run.cached_count} "
         f"ingested={run.ingested_count} matched={run.matched_count} "
-        f"failed={run.failed_count} refreshed={run.refreshed_guild_count}"
+        f"skipped={run.skipped_known_count} replayed={run.replayed_count} "
+        f"failed={run.failed_count} cache_failed={run.cache_failure_count} "
+        f"aggregate_refreshes={run.refreshed_guild_count}"
     )
 
 
@@ -99,14 +101,18 @@ async def _execute_run(
             progress_every=progress_every,
         )
         logging.info(
-            "Completed backfill run %s status=%s discovered=%s cached=%s ingested=%s matched=%s failed=%s",
+            "Completed backfill run %s status=%s discovered=%s cached=%s ingested=%s matched=%s skipped=%s replayed=%s failed=%s cache_failed=%s aggregate_refreshes=%s",
             run.id,
             run.status,
             run.discovered_count,
             run.cached_count,
             run.ingested_count,
             run.matched_count,
+            run.skipped_known_count,
+            run.replayed_count,
             run.failed_count,
+            run.cache_failure_count,
+            run.refreshed_guild_count,
         )
         return run
     finally:
