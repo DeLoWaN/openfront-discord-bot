@@ -5,7 +5,15 @@ from typing import Any
 from ..core.config import MariaDBConfig
 
 try:
-    from peewee import DatabaseProxy, MySQLDatabase
+    from peewee import DatabaseProxy
+    from playhouse.pool import PooledMySQLDatabase
+    from playhouse.shortcuts import ReconnectMixin
+
+    class ReconnectablePooledMySQLDatabase(
+        ReconnectMixin,
+        PooledMySQLDatabase,
+    ):
+        pass
 except ImportError:
     class DatabaseProxy:
         def __init__(self):
@@ -34,7 +42,7 @@ except ImportError:
                 raise AttributeError(name)
             return getattr(self.obj, name)
 
-    class MySQLDatabase:
+    class ReconnectablePooledMySQLDatabase:
         def __init__(self, database: str, **connect_params: Any):
             self.database = database
             self.connect_params = connect_params
@@ -53,6 +61,8 @@ except ImportError:
 
 
 shared_database = DatabaseProxy()
+MARIADB_POOL_MAX_CONNECTIONS = 4
+MARIADB_POOL_STALE_TIMEOUT = 300
 
 
 def build_mariadb_connect_params(config: MariaDBConfig) -> dict[str, object]:
@@ -66,15 +76,20 @@ def build_mariadb_connect_params(config: MariaDBConfig) -> dict[str, object]:
     }
 
 
-def build_mariadb_database(config: MariaDBConfig) -> MySQLDatabase:
-    return MySQLDatabase(config.database, **build_mariadb_connect_params(config))
+def build_mariadb_database(config: MariaDBConfig) -> ReconnectablePooledMySQLDatabase:
+    return ReconnectablePooledMySQLDatabase(
+        config.database,
+        max_connections=MARIADB_POOL_MAX_CONNECTIONS,
+        stale_timeout=MARIADB_POOL_STALE_TIMEOUT,
+        **build_mariadb_connect_params(config),
+    )
 
 
 def init_shared_database(
     config: MariaDBConfig,
     *,
     connect: bool = True,
-) -> MySQLDatabase:
+) -> ReconnectablePooledMySQLDatabase:
     database = build_mariadb_database(config)
     shared_database.initialize(database)
     if connect:

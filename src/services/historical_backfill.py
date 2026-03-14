@@ -563,8 +563,16 @@ async def hydrate_backfill_run(
         )
         for backfill_game, result in zip(batch, results):
             if isinstance(result, Exception):
-                failed_game = BackfillGame.get_by_id(backfill_game.id)
-                _record_failure(run, failed_game, str(result))
+                try:
+                    _record_failure(run, backfill_game, str(result))
+                except Exception as record_exc:
+                    LOGGER.warning(
+                        "run=%s failed to persist failure for game=%s original=%s persistence=%s",
+                        run.id,
+                        backfill_game.openfront_game_id,
+                        result,
+                        record_exc,
+                    )
                 continue
             if result.outcome == "skipped_known":
                 continue

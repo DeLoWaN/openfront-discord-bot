@@ -208,6 +208,9 @@ Notes:
 - omit `mariadb` and `discord_oauth` if you only want the legacy bot
 - if `mariadb` is configured and you run the bot, the bot will bootstrap the
   shared schema bridge and mirror bot links into the shared backend
+- if `mariadb` is configured, OpenFront API traffic also uses the shared
+  upstream coordination state so separate bot, website, and CLI processes do
+  not burst the public API independently
 
 You can also point the bot to another config file with:
 
@@ -407,12 +410,20 @@ Operational notes:
 
 - the CLI requires `mariadb` to be configured
 - runs are resumable through persisted run and cursor state
+- all OpenFront traffic is serialized through a shared conservative gate when
+  the shared MariaDB backend is configured
+- the gate enforces one in-flight OpenFront request globally and at least one
+  second of spacing after successful requests
+- upstream `Retry-After` and reset headers take precedence over the fixed
+  spacing when OpenFront or Cloudflare asks callers to wait longer
 - team history is discovered through clan sessions
 - FFA history is discovered through `/public/games`
 - discovery deduplicates by OpenFront game id before hydration
 - historical date boundaries are applied on the game start time
 - fetched game details are cached locally, and Team games retain turn data so
   donation-based support metrics can be replayed later
+- ordinary `start` and `resume` flows skip readable previously hydrated history
+  instead of reparsing it; `replay` remains the explicit reprocessing path
 - progress logs are emitted to stdout during discovery and hydration
 - `reset-data` clears ingestion/cache/backfill tables only and preserves guild
   configuration plus linked account records
@@ -420,7 +431,8 @@ Operational notes:
 Tuning flags:
 
 - `--concurrency`:
-  concurrent `fetch_game()` workers during hydration
+  concurrent hydration workers inside the local process; the shared OpenFront
+  gate still serializes upstream API requests
 - `--refresh-batch-size`:
   how often aggregate refreshes are flushed
 - `--progress-every`:

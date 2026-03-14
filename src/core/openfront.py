@@ -1,14 +1,33 @@
+from __future__ import annotations
+
 import asyncio
+import logging
+import os
 import random
 import re
+import uuid
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 import aiohttp
 
+from ..data.database import shared_database
+
 OPENFRONT_BASE = "https://api.openfront.io"
 OPENFRONT_LOBBY_BASE = "https://openfront.io/api"
 PUBLIC_GAMES_MAX_RANGE = timedelta(days=2)
+OPENFRONT_GATE_LEASE_SECONDS = 30.0
+OPENFRONT_SUCCESS_DELAY_SECONDS = 1.0
+OPENFRONT_RESET_HEADERS = (
+    "ratelimit-reset",
+    "x-ratelimit-reset",
+    "x-ratelimit-reset-after",
+)
+
+LOGGER = logging.getLogger(__name__)
+_LOCAL_GATE_LOCKS: dict[int, asyncio.Lock] = {}
+_LOCAL_COOLDOWN_UNTIL: datetime | None = None
 
 
 class OpenFrontError(Exception):
@@ -21,6 +40,10 @@ class OpenFrontError(Exception):
         super().__init__(message)
         self.status = status
         self.retry_after = retry_after
+
+
+def _utcnow_naive() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _parse_datetime(value: str | None) -> Optional[datetime]:
@@ -63,15 +86,220 @@ def _parse_retry_after(value: str | None) -> float | None:
     if not value:
         return None
     try:
-        return float(value)
+        return max(float(value), 0.0)
+    except (TypeError, ValueError):
+        pass
+
+    try:
+        retry_time = parsedate_to_datetime(value)
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return None
+
+    if retry_time.tzinfo is None:
+        retry_time = retry_time.replace(tzinfo=timezone.utc)
+    delta = retry_time.astimezone(timezone.utc) - datetime.now(timezone.utc)
+    return max(delta.total_seconds(), 0.0)
+
+
+def _parse_reset_after(value: str | None) -> float | None:
+    if not value:
+        return None
+    try:
+        raw_value = float(value)
     except (TypeError, ValueError):
         return None
+    if raw_value < 0:
+        return None
+    current_epoch = datetime.now(timezone.utc).timestamp()
+    if raw_value > current_epoch + 1:
+        return max(raw_value - current_epoch, 0.0)
+    return raw_value
+
+
+def _response_cooldown_seconds(headers: Dict[str, str]) -> float | None:
+    retry_after = _parse_retry_after(headers.get("retry-after"))
+    if retry_after is not None:
+        return retry_after
+
+    retry_after_ms = headers.get("retry-after-ms")
+    if retry_after_ms is not None:
+        try:
+            return max(float(retry_after_ms) / 1000.0, 0.0)
+        except (TypeError, ValueError):
+            pass
+
+    for header_name in OPENFRONT_RESET_HEADERS:
+        reset_after = _parse_reset_after(headers.get(header_name))
+        if reset_after is not None:
+            return reset_after
+    return None
+
+
+def _shared_database_available():
+    return getattr(shared_database, "obj", None)
+
+
+def _database_supports_for_update(database: object) -> bool:
+    module_name = type(database).__module__.lower()
+    class_name = type(database).__name__.lower()
+    return "sqlite" not in module_name and "sqlite" not in class_name
+
+
+def _get_local_gate_lock() -> asyncio.Lock:
+    loop = asyncio.get_running_loop()
+    loop_id = id(loop)
+    lock = _LOCAL_GATE_LOCKS.get(loop_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _LOCAL_GATE_LOCKS[loop_id] = lock
+    return lock
+
+
+def _local_wait_seconds() -> float:
+    global _LOCAL_COOLDOWN_UNTIL
+    now = _utcnow_naive()
+    if _LOCAL_COOLDOWN_UNTIL and _LOCAL_COOLDOWN_UNTIL > now:
+        return (_LOCAL_COOLDOWN_UNTIL - now).total_seconds()
+    return 0.0
+
+
+def _set_local_cooldown(delay_seconds: float) -> None:
+    global _LOCAL_COOLDOWN_UNTIL
+    _LOCAL_COOLDOWN_UNTIL = _utcnow_naive() + timedelta(
+        seconds=max(delay_seconds, 0.0)
+    )
+
+
+def _shared_wait_or_acquire(owner_id: str) -> float | None:
+    database = _shared_database_available()
+    if database is None:
+        return None
+
+    from ..data.shared.models import OpenFrontRateLimitState
+
+    database.connect(reuse_if_open=True)
+    with database.atomic():
+        OpenFrontRateLimitState.get_or_create(id=1)
+        query = OpenFrontRateLimitState.select().where(
+            OpenFrontRateLimitState.id == 1
+        )
+        if _database_supports_for_update(database):
+            query = query.for_update()
+        state = query.get()
+        now = _utcnow_naive()
+
+        if state.cooldown_until and state.cooldown_until > now:
+            return (state.cooldown_until - now).total_seconds()
+
+        if (
+            state.lease_owner
+            and state.lease_owner != owner_id
+            and state.lease_expires_at
+            and state.lease_expires_at > now
+        ):
+            return (state.lease_expires_at - now).total_seconds()
+
+        state.lease_owner = owner_id
+        state.lease_expires_at = now + timedelta(seconds=OPENFRONT_GATE_LEASE_SECONDS)
+        state.save()
+        return 0.0
+
+
+def _release_shared_gate(owner_id: str, delay_seconds: float, reason: str) -> bool:
+    database = _shared_database_available()
+    if database is None:
+        return False
+
+    from ..data.shared.models import OpenFrontRateLimitState
+
+    database.connect(reuse_if_open=True)
+    with database.atomic():
+        OpenFrontRateLimitState.get_or_create(id=1)
+        query = OpenFrontRateLimitState.select().where(
+            OpenFrontRateLimitState.id == 1
+        )
+        if _database_supports_for_update(database):
+            query = query.for_update()
+        state = query.get()
+        now = _utcnow_naive()
+        cooldown_until = now + timedelta(seconds=max(delay_seconds, 0.0))
+        if state.cooldown_until is None or cooldown_until > state.cooldown_until:
+            state.cooldown_until = cooldown_until
+            state.cooldown_reason = reason
+        if state.lease_owner == owner_id or (
+            state.lease_expires_at and state.lease_expires_at <= now
+        ):
+            state.lease_owner = None
+            state.lease_expires_at = None
+        state.save()
+    return True
+
+
+class _OpenFrontGateLease:
+    def __init__(self, lock: asyncio.Lock, owner_id: str, shared_gate: bool):
+        self._lock = lock
+        self._owner_id = owner_id
+        self._shared_gate = shared_gate
+        self._released = False
+
+    def release(self, delay_seconds: float, reason: str) -> None:
+        if self._released:
+            return
+        try:
+            if self._shared_gate:
+                released = _release_shared_gate(self._owner_id, delay_seconds, reason)
+                if not released:
+                    _set_local_cooldown(delay_seconds)
+            else:
+                _set_local_cooldown(delay_seconds)
+        except Exception as exc:
+            LOGGER.warning(
+                "Shared OpenFront gate release failed (%s). Falling back to local cooldown.",
+                exc,
+            )
+            _set_local_cooldown(delay_seconds)
+        finally:
+            if self._lock.locked():
+                self._lock.release()
+            self._released = True
+
+
+async def _acquire_request_gate(owner_id: str) -> _OpenFrontGateLease:
+    lock = _get_local_gate_lock()
+    await lock.acquire()
+    try:
+        while True:
+            try:
+                shared_wait = _shared_wait_or_acquire(owner_id)
+            except Exception as exc:
+                LOGGER.warning(
+                    "Shared OpenFront gate unavailable (%s). Falling back to local cooldown.",
+                    exc,
+                )
+                shared_wait = None
+
+            if shared_wait is None:
+                local_wait = _local_wait_seconds()
+                if local_wait <= 0:
+                    return _OpenFrontGateLease(lock, owner_id, False)
+                await asyncio.sleep(local_wait)
+                continue
+
+            if shared_wait <= 0:
+                return _OpenFrontGateLease(lock, owner_id, True)
+
+            await asyncio.sleep(shared_wait)
+    except Exception:
+        if lock.locked():
+            lock.release()
+        raise
 
 
 class OpenFrontClient:
     def __init__(self, session: aiohttp.ClientSession | None = None):
         self._session = session
         self._owns_session = session is None
+        self._request_owner = f"{os.getpid()}:{uuid.uuid4().hex}"
 
     async def close(self):
         if self._owns_session and self._session:
@@ -86,6 +314,8 @@ class OpenFrontClient:
         retry_on_429: bool = True,
         ignore_content_type: bool = False,
     ) -> tuple[Any, Dict[str, str]]:
+        del retry_on_429
+
         if self._session is None:
             self._session = aiohttp.ClientSession()
         if path.startswith("http"):
@@ -96,43 +326,48 @@ class OpenFrontClient:
         backoff = 1.0
         last_status: int | None = None
         for attempt in range(5):
+            lease = await _acquire_request_gate(self._request_owner)
             try:
                 async with self._session.request(method, url) as resp:
-                    if resp.status == 429 and not retry_on_429:
-                        retry_after = _parse_retry_after(
-                            resp.headers.get("Retry-After")
-                        )
-                        raise OpenFrontError(
-                            "Rate limited", resp.status, retry_after=retry_after
-                        )
+                    headers = {
+                        key.lower(): value for key, value in resp.headers.items()
+                    }
+                    rate_limit_delay = _response_cooldown_seconds(headers)
                     if resp.status in fail_fast:
+                        lease.release(
+                            max(rate_limit_delay or 0.0, OPENFRONT_SUCCESS_DELAY_SECONDS),
+                            f"status:{resp.status}",
+                        )
                         raise OpenFrontError(
-                            f"Failed request {url}: {resp.status}", resp.status
+                            f"Failed request {url}: {resp.status}",
+                            resp.status,
+                            retry_after=rate_limit_delay,
                         )
                     if resp.status in (429, 500, 502, 503, 504):
-                        retry_after = None
-                        if resp.status == 429:
-                            retry_after = _parse_retry_after(
-                                resp.headers.get("Retry-After")
-                            )
+                        retry_delay = (
+                            rate_limit_delay
+                            if rate_limit_delay is not None
+                            else backoff + random.random()
+                        )
+                        lease.release(retry_delay, f"status:{resp.status}")
                         raise OpenFrontError(
                             f"Transient error {resp.status}",
                             resp.status,
-                            retry_after=retry_after,
+                            retry_after=rate_limit_delay,
                         )
                     resp.raise_for_status()
                     if ignore_content_type:
                         payload = await resp.json(content_type=None)
                     else:
                         payload = await resp.json()
-                    headers = {
-                        key.lower(): value for key, value in resp.headers.items()
-                    }
+                    lease.release(
+                        max(rate_limit_delay or 0.0, OPENFRONT_SUCCESS_DELAY_SECONDS),
+                        "success",
+                    )
                     return payload, headers
             except OpenFrontError as exc:
-                status = exc.status
-                last_status = status or last_status
-                if status in fail_fast or (status == 429 and not retry_on_429):
+                last_status = exc.status or last_status
+                if exc.status in fail_fast:
                     raise
                 if attempt == 4:
                     raise OpenFrontError(
@@ -140,12 +375,11 @@ class OpenFrontClient:
                         status=last_status,
                         retry_after=exc.retry_after,
                     ) from exc
-                if status == 429 and exc.retry_after:
-                    await asyncio.sleep(exc.retry_after)
-                else:
-                    await asyncio.sleep(backoff + random.random())
-                    backoff *= 2
+                backoff *= 2
+                continue
             except Exception as exc:
+                delay = backoff + random.random()
+                lease.release(delay, "transport_error")
                 status = getattr(exc, "status", None)
                 last_status = status or last_status
                 if status in fail_fast:
@@ -156,8 +390,8 @@ class OpenFrontClient:
                     raise OpenFrontError(
                         f"Failed request {url}: {exc}", status=last_status
                     ) from exc
-                await asyncio.sleep(backoff + random.random())
                 backoff *= 2
+                continue
         return None, {}
 
     async def _request(
@@ -183,7 +417,6 @@ class OpenFrontClient:
         return await self._request("GET", f"/public/player/{player_id}")
 
     async def fetch_sessions(self, player_id: str) -> List[Dict[str, Any]]:
-        # If pagination appears (e.g., next/offset), follow until exhausted.
         sessions: List[Dict[str, Any]] = []
         next_path = f"/public/player/{player_id}/sessions"
         while next_path:
@@ -269,7 +502,6 @@ class OpenFrontClient:
         seen_game_ids: set[str] = set()
         window_start = start
         while True:
-            # The public games endpoint rejects windows larger than 2 days.
             window_end = min(window_start + PUBLIC_GAMES_MAX_RANGE, end)
             for game in await self._fetch_public_games_window(
                 window_start, window_end, limit=limit
@@ -296,7 +528,6 @@ class OpenFrontClient:
             "GET",
             f"/public/game/{game_id}{suffix}",
             fail_fast_statuses={404},
-            retry_on_429=False,
         )
 
     async def fetch_public_lobbies(self) -> List[Dict[str, Any]]:
@@ -304,7 +535,6 @@ class OpenFrontClient:
             "GET",
             "/public_lobbies",
             base=OPENFRONT_LOBBY_BASE,
-            retry_on_429=False,
             ignore_content_type=True,
         )
         if isinstance(payload, dict) and "lobbies" in payload:

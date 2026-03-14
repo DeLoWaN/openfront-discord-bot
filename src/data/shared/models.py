@@ -126,6 +126,17 @@ class BackfillRun(SharedBaseModel):
         table_name = "backfill_runs"
 
 
+class OpenFrontRateLimitState(SharedBaseModel):
+    id = IntegerField(primary_key=True)
+    lease_owner = CharField(null=True)
+    lease_expires_at = DateTimeField(null=True)
+    cooldown_until = DateTimeField(null=True)
+    cooldown_reason = TextField(null=True)
+
+    class Meta:
+        table_name = "openfront_rate_limit_state"
+
+
 class BackfillCursor(SharedBaseModel):
     id = AutoField()
     run = ForeignKeyField(BackfillRun, backref="cursors", on_delete="CASCADE")
@@ -261,6 +272,7 @@ SHARED_MODELS = (
     PlayerAlias,
     PlayerLink,
     BackfillRun,
+    OpenFrontRateLimitState,
     BackfillCursor,
     CachedOpenFrontGame,
     BackfillGame,

@@ -2,7 +2,7 @@ import asyncio
 import json
 from datetime import datetime
 
-from peewee import SqliteDatabase
+from peewee import InterfaceError, SqliteDatabase
 
 
 def setup_shared_database(tmp_path):
@@ -743,3 +743,53 @@ def test_reset_ingested_web_data_clears_ingestion_tables_only(tmp_path):
     assert Player.select().count() == 1
     assert PlayerAlias.select().count() == 1
     assert PlayerLink.select().count() == 1
+
+
+def test_hydrate_backfill_run_preserves_original_failure_when_db_relookup_drops(
+    tmp_path, monkeypatch
+):
+    from src.data.shared.models import BackfillGame
+    from src.services.historical_backfill import create_backfill_run, hydrate_backfill_run
+    from src.openfront import OpenFrontError
+
+    setup_shared_database(tmp_path)
+
+    run = create_backfill_run(
+        start=datetime(2026, 3, 1),
+        end=datetime(2026, 3, 5),
+    )
+    queued = BackfillGame.create(
+        run=run,
+        openfront_game_id="db-drop-game",
+        source_type="team",
+        status="pending",
+    )
+
+    class FailingClient:
+        async def fetch_game(self, game_id, include_turns=False):
+            raise OpenFrontError("upstream throttled", status=429, retry_after=30)
+
+    original_get_by_id = BackfillGame.get_by_id
+    get_calls = {"count": 0}
+
+    def flaky_get_by_id(cls, pk):
+        get_calls["count"] += 1
+        if get_calls["count"] == 1:
+            return original_get_by_id(pk)
+        raise InterfaceError(0, "")
+
+    monkeypatch.setattr(BackfillGame, "get_by_id", classmethod(flaky_get_by_id))
+
+    hydrated = asyncio.run(
+        hydrate_backfill_run(
+            FailingClient(),
+            run.id,
+            progress_every=1,
+        )
+    )
+    queued = BackfillGame.select().where(BackfillGame.id == queued.id).get()
+
+    assert hydrated.status == "completed_with_failures"
+    assert hydrated.failed_count == 1
+    assert queued.status == "failed"
+    assert queued.last_error == "upstream throttled"

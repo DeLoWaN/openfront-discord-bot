@@ -1,7 +1,13 @@
 import asyncio
+from email.utils import format_datetime
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlparse
 
+from peewee import SqliteDatabase
+
+from src.core import openfront as openfront_module
+from src.data.database import shared_database
+from src.data.shared.schema import bootstrap_shared_schema
 from src.openfront import OpenFrontClient
 
 
@@ -77,3 +83,123 @@ def test_fetch_public_games_chunks_large_ranges_and_deduplicates_boundaries():
         call_end - call_start <= timedelta(days=2)
         for call_start, call_end, _ in client.calls
     )
+
+
+def setup_shared_database(tmp_path):
+    database = SqliteDatabase(
+        str(tmp_path / "openfront-shared.db"),
+        check_same_thread=False,
+    )
+    shared_database.initialize(database)
+    bootstrap_shared_schema(database)
+    return database
+
+
+class FakeClock:
+    def __init__(self, current: datetime):
+        self.current = current
+        self.sleep_calls = []
+
+    def now(self):
+        return self.current
+
+    async def sleep(self, delay: float):
+        self.sleep_calls.append(delay)
+        self.current += timedelta(seconds=delay)
+
+
+class FakeResponse:
+    def __init__(self, status, payload, headers=None):
+        self.status = status
+        self._payload = payload
+        self.headers = headers or {}
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def json(self, content_type=None):
+        return self._payload
+
+    def raise_for_status(self):
+        if self.status >= 400:
+            raise RuntimeError(f"unexpected status {self.status}")
+
+
+class QueueSession:
+    def __init__(self, clock, responses):
+        self.clock = clock
+        self.responses = list(responses)
+        self.requests = []
+
+    def request(self, method, url):
+        self.requests.append((method, url, self.clock.now()))
+        return self.responses.pop(0)
+
+    async def close(self):
+        return None
+
+
+def test_parse_retry_after_accepts_http_date():
+    retry_time = datetime.now(timezone.utc) + timedelta(seconds=120)
+
+    parsed = openfront_module._parse_retry_after(
+        format_datetime(retry_time, usegmt=True)
+    )
+
+    assert parsed is not None
+    assert 100 <= parsed <= 120
+
+
+def test_fetch_game_retries_rate_limits_and_honors_retry_after(
+    tmp_path, monkeypatch
+):
+    setup_shared_database(tmp_path)
+    clock = FakeClock(datetime(2026, 3, 14, 0, 0, 0))
+    session = QueueSession(
+        clock,
+        [
+            FakeResponse(429, {"error": "rate limited"}, {"Retry-After": "3"}),
+            FakeResponse(200, {"info": {"gameID": "g-rate"}}),
+        ],
+    )
+    client = OpenFrontClient(session=session)
+
+    monkeypatch.setattr(openfront_module, "_utcnow_naive", clock.now)
+    monkeypatch.setattr(openfront_module.asyncio, "sleep", clock.sleep)
+
+    payload = asyncio.run(client.fetch_game("g-rate"))
+
+    assert payload["info"]["gameID"] == "g-rate"
+    assert clock.sleep_calls == [3]
+    assert len(session.requests) == 2
+    assert session.requests[1][2] - session.requests[0][2] == timedelta(seconds=3)
+
+
+def test_openfront_clients_share_global_success_cooldown(tmp_path, monkeypatch):
+    setup_shared_database(tmp_path)
+    clock = FakeClock(datetime(2026, 3, 14, 0, 0, 0))
+    session_one = QueueSession(clock, [FakeResponse(200, {"playerId": "p1"})])
+    session_two = QueueSession(clock, [FakeResponse(200, {"playerId": "p2"})])
+    client_one = OpenFrontClient(session=session_one)
+    client_two = OpenFrontClient(session=session_two)
+
+    monkeypatch.setattr(openfront_module, "_utcnow_naive", clock.now)
+    monkeypatch.setattr(openfront_module.asyncio, "sleep", clock.sleep)
+
+    async def run_requests():
+        return await asyncio.gather(
+            client_one.fetch_player("player-1"),
+            client_two.fetch_player("player-2"),
+        )
+
+    first, second = asyncio.run(run_requests())
+
+    assert first["playerId"] == "p1"
+    assert second["playerId"] == "p2"
+    request_times = sorted(
+        [session_one.requests[0][2], session_two.requests[0][2]]
+    )
+    assert request_times[1] - request_times[0] == timedelta(seconds=1)
