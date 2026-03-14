@@ -67,7 +67,8 @@ def test_guild_stats_api_exposes_leaderboard_and_scoring_payloads(tmp_path):
     assert leaderboard.json()["rows"][0]["display_username"] == "Ace"
     assert "[NU] Ace" not in leaderboard.text
     assert scoring.status_code == 200
-    assert "70% team" in scoring.json()["overall_summary"].lower()
+    assert "summary" in scoring.json()
+    assert scoring.json()["details"]["title"] == "Exact computation"
     assert profile.status_code == 200
     assert profile.json()["player"]["display_username"] == "Ace"
     assert profile.json()["player"]["team_score"] == 260.0

@@ -46,6 +46,7 @@ def _leaderboard_columns(view: str) -> tuple[LeaderboardColumn, ...]:
     if view == "team":
         return (
             ("Team Score", lambda row: _format_table_value(row["team_score"])),
+            ("Support Bonus", lambda row: _format_table_value(row["support_bonus"])),
             ("Wins", lambda row: _format_table_value(row["team_win_count"])),
             ("Win Rate", lambda row: _format_percent(row["team_win_rate"])),
             ("Games", lambda row: _format_table_value(row["team_game_count"])),
@@ -53,7 +54,6 @@ def _leaderboard_columns(view: str) -> tuple[LeaderboardColumn, ...]:
                 "Troops Donated",
                 lambda row: _format_table_value(row["donated_troops_total"]),
             ),
-            ("Support Bonus", lambda row: _format_table_value(row["support_bonus"])),
             ("Role", lambda row: _format_table_value(row["role_label"])),
         )
     if view == "ffa":
@@ -68,11 +68,13 @@ def _leaderboard_columns(view: str) -> tuple[LeaderboardColumn, ...]:
             ("Overall Score", lambda row: _format_table_value(row["overall_score"])),
             ("Team Score", lambda row: _format_table_value(row["team_score"])),
             ("FFA Score", lambda row: _format_table_value(row["ffa_score"])),
+            ("Support Bonus", lambda row: _format_table_value(row["support_bonus"])),
             ("Team Games", lambda row: _format_table_value(row["team_game_count"])),
             ("FFA Games", lambda row: _format_table_value(row["ffa_game_count"])),
         )
     if view == "support":
         return (
+            ("Support Bonus", lambda row: _format_table_value(row["support_bonus"])),
             (
                 "Troops Donated",
                 lambda row: _format_table_value(row["donated_troops_total"]),
@@ -82,11 +84,36 @@ def _leaderboard_columns(view: str) -> tuple[LeaderboardColumn, ...]:
                 "Donation Actions",
                 lambda row: _format_table_value(row["donation_action_count"]),
             ),
-            ("Support Bonus", lambda row: _format_table_value(row["support_bonus"])),
             ("Team Games", lambda row: _format_table_value(row["team_game_count"])),
             ("Role", lambda row: _format_table_value(row["role_label"])),
         )
     raise ValueError(f"Unsupported leaderboard view: {view}")
+
+
+def _render_scoring_details(scoring: Mapping[str, object]) -> str:
+    details = scoring.get("details")
+    if not isinstance(details, Mapping):
+        return ""
+    title = escape(str(details.get("title") or "Exact computation"))
+    sections = details.get("sections")
+    if not isinstance(sections, list):
+        return f"<details><summary>{title}</summary></details>"
+
+    section_markup = ""
+    for section in sections:
+        if not isinstance(section, Mapping):
+            continue
+        section_title = escape(str(section.get("title") or ""))
+        lines = section.get("lines")
+        if isinstance(lines, list):
+            rendered_lines = "".join(
+                f"<li>{escape(str(line))}</li>" for line in lines if str(line).strip()
+            )
+            lines_markup = f"<ul>{rendered_lines}</ul>" if rendered_lines else ""
+        else:
+            lines_markup = ""
+        section_markup += f"<section><h3>{section_title}</h3>{lines_markup}</section>"
+    return f"<details><summary>{title}</summary>{section_markup}</details>"
 
 
 def _render_guild_page(title: str, body: str) -> str:
@@ -362,26 +389,19 @@ def create_app(
             f'<td colspan="{len(columns) + 1}">No guild players have been aggregated yet.</td>'
             "</tr>"
         )
-        overall_scoring_summary = ""
-        if resolved_view == "overall":
-            overall_scoring_summary = (
-                "<section>"
-                "<p><strong>How scoring works:</strong> "
-                f'{escape(scoring["overall_summary"])}</p>'
-                "</section>"
-            )
+        scoring_details = _render_scoring_details(scoring)
         body = f"""
         <header>
           <p>{escape(guild.display_name)}</p>
           <h1>Leaderboard</h1>
-          <p>{escape(scoring["summary"])}</p>
+          <p><strong>How scoring works:</strong> {escape(scoring["summary"])}</p>
         </header>
         <nav>
           <a class="nav-link" href="/">Back to guild home</a>
           <a class="nav-link" href="/players">Browse players</a>
           {nav_links}
         </nav>
-        {overall_scoring_summary}
+        {scoring_details}
         <table>
           <thead>
             <tr>{header_cells}</tr>

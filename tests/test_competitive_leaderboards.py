@@ -94,14 +94,16 @@ def test_build_leaderboard_rows_for_competitive_views(tmp_path):
     assert team["rows"][1]["state"] == "Linked"
     assert ffa["rows"][0]["display_username"] == "Bolt"
     assert overall["rows"][0]["display_username"] == "Ace"
-    assert support["default_sort"] == "donated_troops_total"
+    assert "support_bonus" in overall["rows"][0]
+    assert support["default_sort"] == "support_bonus"
     assert support["rows"][0]["display_username"] == "Bolt"
     assert support["rows"][0]["role_label"] == "Backliner"
-    assert "more teams count more" in scoring["summary"].lower()
-    assert "small sample" in overall_scoring["summary"].lower()
+    assert "support bonus" in scoring["summary"].lower()
+    assert scoring["details"]["title"] == "Exact computation"
+    assert "confidence" in overall_scoring["summary"].lower()
 
 
-def test_build_leaderboard_overall_falls_back_to_team_score_for_team_only_rows(tmp_path):
+def test_build_leaderboard_overall_keeps_single_mode_rows_on_normalized_scale(tmp_path):
     from src.data.shared.models import GuildPlayerAggregate
     from src.services.guild_sites import provision_guild_site
     from src.services.guild_stats_api import build_leaderboard_response
@@ -139,4 +141,4 @@ def test_build_leaderboard_overall_falls_back_to_team_score_for_team_only_rows(t
     overall = build_leaderboard_response(guild, "overall")
 
     assert overall["rows"][0]["display_username"] == "Temujin"
-    assert overall["rows"][0]["overall_score"] == 980.97
+    assert overall["rows"][0]["overall_score"] == 0.0

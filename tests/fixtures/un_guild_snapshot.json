@@ -1,0 +1,22 @@
+{
+  "player_count": 3833,
+  "top_team_player": "LeVi",
+  "top_support_player": "Tobberr",
+  "allowed_top_overall_players": [
+    "Kazz"
+  ],
+  "support_order_pairs": [
+    [
+      "Tobberr",
+      "Restart"
+    ],
+    [
+      "CENTCOM",
+      "Macron"
+    ],
+    [
+      "Support1",
+      "murky"
+    ]
+  ]
+}

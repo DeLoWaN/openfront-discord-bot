@@ -359,48 +359,120 @@ def _is_ffa_mode(mode_name: str | None) -> bool:
     return str(mode_name or "").strip().lower() == "free for all"
 
 
+def _infer_team_count(
+    *,
+    num_teams: Any,
+    player_teams: Any,
+    total_player_count: Any,
+) -> int | None:
+    explicit_num_teams = _safe_int(num_teams)
+    if explicit_num_teams > 1:
+        return explicit_num_teams
+
+    if isinstance(player_teams, (int, float)):
+        numeric_teams = int(player_teams)
+        return numeric_teams if numeric_teams > 1 else None
+
+    label = str(player_teams or "").strip()
+    if not label:
+        return None
+    if label.isdigit():
+        numeric_teams = int(label)
+        return numeric_teams if numeric_teams > 1 else None
+
+    named_team_sizes = {"duos": 2, "trios": 3, "quads": 4}
+    players_per_team = named_team_sizes.get(label.lower())
+    total_players = _safe_int(total_player_count)
+    if players_per_team and total_players > 0 and total_players % players_per_team == 0:
+        inferred_num_teams = total_players // players_per_team
+        return inferred_num_teams if inferred_num_teams > 1 else None
+
+    return None
+
+
+def _game_recency_weight(
+    game_time: datetime | None,
+    *,
+    now: datetime | None = None,
+) -> float:
+    if game_time is None:
+        return 1.0
+    reference_now = now or datetime.now(timezone.utc).replace(tzinfo=None)
+    age_seconds = max(0.0, (reference_now - game_time).total_seconds())
+    days_since_game = age_seconds / 86400.0
+    return 0.4 + (0.6 * (0.5 ** (days_since_game / 45.0)))
+
+
 def _team_difficulty_weight(game: ObservedGame) -> float:
-    if isinstance(game.num_teams, int) and game.num_teams > 1:
-        return math.sqrt(max(1, game.num_teams - 1))
+    inferred_num_teams = _infer_team_count(
+        num_teams=game.num_teams,
+        player_teams=game.player_teams,
+        total_player_count=game.total_player_count,
+    )
+    if inferred_num_teams and inferred_num_teams > 1:
+        return math.sqrt(max(1, inferred_num_teams - 1))
     return 1.0
 
 
-def _recent_activity_bonus(last_game_at: datetime | None) -> float:
-    if last_game_at is None:
-        return 0.0
-    age = datetime.now(timezone.utc).replace(tzinfo=None) - last_game_at
-    if age.days <= 7:
-        return 20.0
-    if age.days <= 30:
-        return 10.0
-    if age.days <= 90:
-        return 5.0
-    return 0.0
+def _team_result_delta(
+    *,
+    inferred_num_teams: int | None,
+    did_win: bool,
+    guild_stack: int,
+    game_time: datetime | None,
+    now: datetime | None = None,
+) -> float:
+    difficulty = (
+        math.sqrt(max(1, inferred_num_teams - 1))
+        if inferred_num_teams and inferred_num_teams > 1
+        else 1.0
+    )
+    stack_multiplier = math.sqrt(max(1, guild_stack))
+    recency_weight = _game_recency_weight(game_time, now=now)
+    if did_win:
+        return difficulty * recency_weight / stack_multiplier
+    return -0.4 * difficulty * recency_weight * stack_multiplier
 
 
-def _compute_support_bonus(payload: dict[str, Any]) -> float:
-    base_team_score = float(payload["_base_team_score"])
-    donated_troops_total = int(payload["donated_troops_total"])
-    donated_gold_total = int(payload["donated_gold_total"])
-    donation_action_count = int(payload["donation_action_count"])
-    attack_troops_total = int(payload["attack_troops_total"])
-
+def _support_raw_delta(
+    *,
+    donated_troops_total: int,
+    donated_gold_total: int,
+    donation_action_count: int,
+    attack_troops_total: int,
+    game_time: datetime | None,
+    now: datetime | None = None,
+) -> float:
     if donated_troops_total <= 0 and donated_gold_total <= 0 and donation_action_count <= 0:
         return 0.0
 
     support_share_denominator = donated_troops_total + attack_troops_total
-    support_share = (
-        donated_troops_total / support_share_denominator
-        if support_share_denominator > 0
-        else 1.0
+    if support_share_denominator > 0:
+        support_share = donated_troops_total / support_share_denominator
+    else:
+        support_share = 1.0
+
+    support_volume = math.log1p(max(donated_troops_total, 0) / 1_000_000.0)
+    support_volume += 0.5 * math.log1p(max(donated_gold_total, 0) / 1_000_000.0)
+    support_volume += 0.5 * math.log1p(max(donation_action_count, 0))
+    return _game_recency_weight(game_time, now=now) * support_volume * (
+        0.5 + (0.5 * support_share)
     )
-    raw_bonus = (
-        min(donated_troops_total / 1000.0, 25.0)
-        + min(donated_gold_total / 100000.0, 10.0)
-        + min(donation_action_count * 2.0, 20.0)
-    )
-    adjusted_bonus = raw_bonus * (0.5 + (0.5 * support_share))
-    return round(min(base_team_score * 0.1, adjusted_bonus), 2)
+
+
+def _ffa_result_delta(
+    *,
+    total_player_count: int | None,
+    did_win: bool,
+    game_time: datetime | None,
+    now: datetime | None = None,
+) -> float:
+    player_count = int(total_player_count or 0)
+    difficulty = math.sqrt(max(1, player_count - 1)) if player_count > 1 else 1.0
+    recency_weight = _game_recency_weight(game_time, now=now)
+    if did_win:
+        return difficulty * recency_weight
+    return -0.25 * difficulty * recency_weight
 
 
 def _compute_team_game_role(
@@ -466,19 +538,22 @@ def _record_team_game_role(payload: dict[str, Any], participant: GameParticipant
 def _mode_confidence(game_count: int) -> float:
     if game_count <= 0:
         return 0.0
-    return min(1.0, game_count / 50.0)
+    return min(1.0, game_count / 25.0)
 
 
 def _compute_mode_indexes(
     payloads: list[dict[str, Any]],
     *,
     score_key: str,
-    game_count_key: str,
+    eligibility_key: str,
+    tie_break_key: str,
+    positive_only: bool = False,
 ) -> dict[str, float]:
     relevant_payloads = [
         payload
         for payload in payloads
-        if int(payload.get(game_count_key, 0) or 0) > 0
+        if int(payload.get(eligibility_key, 0) or 0) > 0
+        and (not positive_only or float(payload.get(score_key, 0.0) or 0.0) > 0.0)
     ]
     if not relevant_payloads:
         return {}
@@ -487,7 +562,7 @@ def _compute_mode_indexes(
         relevant_payloads,
         key=lambda payload: (
             float(payload.get(score_key, 0.0) or 0.0),
-            int(payload.get(game_count_key, 0) or 0),
+            int(payload.get(tie_break_key, 0) or 0),
             str(payload.get("normalized_username") or ""),
         ),
         reverse=True,
@@ -507,12 +582,16 @@ def refresh_guild_player_aggregates(guild_id: int | Guild) -> list[GuildPlayerAg
     guild = guild_id if isinstance(guild_id, Guild) else Guild.get_by_id(guild_id)
     tracked_tags = _tracked_tags_by_guild_id().get(_field_int(guild.id), set())
     GuildPlayerAggregate.delete().where(GuildPlayerAggregate.guild == guild).execute()
-    participants = (
+    participants = list(
         GameParticipant.select(GameParticipant, ObservedGame)
         .join(ObservedGame)
         .where(GameParticipant.guild == guild)
         .order_by(ObservedGame.started_at, ObservedGame.ended_at, GameParticipant.id)
     )
+    team_stack_counts: dict[int, int] = {}
+    for participant in participants:
+        if _is_team_mode(participant.game.mode_name):
+            team_stack_counts[participant.game_id] = team_stack_counts.get(participant.game_id, 0) + 1
 
     grouped: dict[str, dict[str, Any]] = {}
     for participant in participants:
@@ -547,7 +626,9 @@ def refresh_guild_player_aggregates(guild_id: int | Guild) -> list[GuildPlayerAg
                 "last_team_game_at": None,
                 "last_ffa_game_at": None,
                 "last_game_at": game_time,
-                "_team_result_points": 0.0,
+                "_team_result_raw": 0.0,
+                "_team_support_raw": 0.0,
+                "_ffa_result_raw": 0.0,
                 "_team_role_counts": _initial_team_role_counts(),
             },
         )
@@ -573,10 +654,23 @@ def refresh_guild_player_aggregates(guild_id: int | Guild) -> list[GuildPlayerAg
         if _is_team_mode(participant.game.mode_name):
             current["team_game_count"] += 1
             current["team_win_count"] += int(bool(participant.did_win))
-            current["_team_result_points"] += (
-                _team_difficulty_weight(participant.game)
-                if bool(participant.did_win)
-                else 0.0
+            inferred_num_teams = _infer_team_count(
+                num_teams=participant.game.num_teams,
+                player_teams=participant.game.player_teams,
+                total_player_count=participant.game.total_player_count,
+            )
+            current["_team_result_raw"] += _team_result_delta(
+                inferred_num_teams=inferred_num_teams,
+                did_win=bool(participant.did_win),
+                guild_stack=team_stack_counts.get(participant.game_id, 1),
+                game_time=game_time,
+            )
+            current["_team_support_raw"] += _support_raw_delta(
+                donated_troops_total=_field_int(participant.donated_troops_total),
+                donated_gold_total=_field_int(participant.donated_gold_total),
+                donation_action_count=_field_int(participant.donation_action_count),
+                attack_troops_total=_field_int(participant.attack_troops_total),
+                game_time=game_time,
             )
             _record_team_game_role(current, participant)
             if game_time and (
@@ -587,6 +681,11 @@ def refresh_guild_player_aggregates(guild_id: int | Guild) -> list[GuildPlayerAg
         elif _is_ffa_mode(participant.game.mode_name):
             current["ffa_game_count"] += 1
             current["ffa_win_count"] += int(bool(participant.did_win))
+            current["_ffa_result_raw"] += _ffa_result_delta(
+                total_player_count=participant.game.total_player_count,
+                did_win=bool(participant.did_win),
+                game_time=game_time,
+            )
             if game_time and (
                 current["last_ffa_game_at"] is None
                 or game_time >= current["last_ffa_game_at"]
@@ -594,77 +693,62 @@ def refresh_guild_player_aggregates(guild_id: int | Guild) -> list[GuildPlayerAg
                 current["last_ffa_game_at"] = game_time
 
     payloads = list(grouped.values())
-    for payload in payloads:
-        team_win_rate = (
-            payload["team_win_count"] / payload["team_game_count"]
-            if payload["team_game_count"]
-            else 0.0
-        )
-        ffa_win_rate = (
-            payload["ffa_win_count"] / payload["ffa_game_count"]
-            if payload["ffa_game_count"]
-            else 0.0
-        )
-        payload["_base_team_score"] = (
-            (payload["_team_result_points"] * 100.0)
-            + (team_win_rate * 50.0)
-            + _recent_activity_bonus(payload["last_team_game_at"])
-        )
-        payload["support_bonus"] = _compute_support_bonus(payload)
-        payload["team_score"] = round(
-            payload["_base_team_score"] + payload["support_bonus"],
-            2,
-        )
-        payload["ffa_score"] = round(
-            (payload["ffa_win_count"] * 100.0)
-            + (ffa_win_rate * 50.0)
-            + _recent_activity_bonus(payload["last_ffa_game_at"]),
-            2,
-        )
-        payload["role_label"] = _compute_role_label(payload)
-        payload.pop("_base_team_score", None)
-        payload.pop("_team_result_points", None)
-        payload.pop("_team_role_counts", None)
-
     team_indexes = _compute_mode_indexes(
         payloads,
-        score_key="team_score",
-        game_count_key="team_game_count",
+        score_key="_team_result_raw",
+        eligibility_key="team_game_count",
+        tie_break_key="team_game_count",
+    )
+    support_indexes = _compute_mode_indexes(
+        payloads,
+        score_key="_team_support_raw",
+        eligibility_key="team_game_count",
+        tie_break_key="donation_action_count",
+        positive_only=True,
     )
     ffa_indexes = _compute_mode_indexes(
         payloads,
-        score_key="ffa_score",
-        game_count_key="ffa_game_count",
+        score_key="_ffa_result_raw",
+        eligibility_key="ffa_game_count",
+        tie_break_key="ffa_game_count",
     )
 
     created: list[GuildPlayerAggregate] = []
     for payload in payloads:
+        normalized_username = str(payload["normalized_username"])
         team_game_count = int(payload["team_game_count"])
         ffa_game_count = int(payload["ffa_game_count"])
-        if team_game_count > 0 and ffa_game_count == 0:
-            payload["overall_score"] = payload["team_score"]
-            created.append(GuildPlayerAggregate.create(guild=guild, **payload))
-            continue
-        if ffa_game_count > 0 and team_game_count == 0:
-            payload["overall_score"] = payload["ffa_score"]
-            created.append(GuildPlayerAggregate.create(guild=guild, **payload))
-            continue
-
-        team_confidence = _mode_confidence(int(payload["team_game_count"]))
-        ffa_confidence = _mode_confidence(int(payload["ffa_game_count"]))
-        team_weight = 0.7 * team_confidence
-        ffa_weight = 0.3 * ffa_confidence
-        total_weight = team_weight + ffa_weight
-        blended_index = 0.0
-        if total_weight > 0:
-            blended_index = (
-                (team_indexes.get(payload["normalized_username"], 0.0) * team_weight)
-                + (ffa_indexes.get(payload["normalized_username"], 0.0) * ffa_weight)
-            ) / total_weight
-        payload["overall_score"] = round(
-            blended_index * max(team_confidence, ffa_confidence),
+        payload["support_bonus"] = round(support_indexes.get(normalized_username, 0.0), 2)
+        payload["team_score"] = round(
+            (team_indexes.get(normalized_username, 0.0) * 0.75)
+            + (payload["support_bonus"] * 0.25),
             2,
         )
+        payload["ffa_score"] = round(ffa_indexes.get(normalized_username, 0.0), 2)
+        payload["role_label"] = _compute_role_label(payload)
+
+        mode_weights: list[tuple[float, float, float]] = []
+        if team_game_count > 0:
+            mode_weights.append((0.7, payload["team_score"], _mode_confidence(team_game_count)))
+        if ffa_game_count > 0:
+            mode_weights.append((0.3, payload["ffa_score"], _mode_confidence(ffa_game_count)))
+        total_mode_weight = sum(weight for weight, _, _ in mode_weights)
+        if total_mode_weight > 0:
+            blended_mode_score = sum(
+                (weight / total_mode_weight) * score for weight, score, _ in mode_weights
+            )
+            overall_confidence = sum(
+                (weight / total_mode_weight) * confidence
+                for weight, _, confidence in mode_weights
+            )
+            payload["overall_score"] = round(blended_mode_score * overall_confidence, 2)
+        else:
+            payload["overall_score"] = 0.0
+
+        payload.pop("_team_result_raw", None)
+        payload.pop("_team_support_raw", None)
+        payload.pop("_ffa_result_raw", None)
+        payload.pop("_team_role_counts", None)
         created.append(GuildPlayerAggregate.create(guild=guild, **payload))
     return created
 

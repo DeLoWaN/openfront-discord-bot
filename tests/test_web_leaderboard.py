@@ -149,6 +149,7 @@ def test_leaderboard_uses_view_specific_default_columns(tmp_path):
     assert "<th>Overall Score</th>" in overall.text
     assert "<th>Team Score</th>" in overall.text
     assert "<th>FFA Score</th>" in overall.text
+    assert "<th>Support Bonus</th>" in overall.text
     assert "<th>Team Games</th>" in overall.text
     assert "<th>FFA Games</th>" in overall.text
     assert "<th>Role</th>" not in overall.text
@@ -172,12 +173,6 @@ def test_leaderboard_shows_overall_weighting_copy_only_on_overall_view(tmp_path)
     from fastapi.testclient import TestClient
 
     client = TestClient(make_client(tmp_path))
-    overall_copy = (
-        "Overall targets 70% Team and 30% FFA when both modes have meaningful "
-        "samples, and otherwise falls back to the mode the player actually "
-        "played."
-    )
-
     team = client.get(
         "/leaderboard?view=team",
         headers={"host": "north.example.test"},
@@ -195,10 +190,12 @@ def test_leaderboard_shows_overall_weighting_copy_only_on_overall_view(tmp_path)
         headers={"host": "north.example.test"},
     )
 
-    assert overall_copy not in team.text
-    assert overall_copy not in ffa.text
-    assert overall_copy in overall.text
-    assert overall_copy not in support.text
+    assert "Exact computation" in team.text
+    assert "Exact computation" in ffa.text
+    assert "Exact computation" in overall.text
+    assert "Exact computation" in support.text
+    assert "support bonus" in team.text.lower()
+    assert "confidence" in overall.text.lower()
 
 
 def test_player_profile_page_is_public_for_observed_and_linked_entries(tmp_path):

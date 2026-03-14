@@ -13,7 +13,7 @@ DEFAULT_SORT_BY_VIEW = {
     "team": "team_score",
     "ffa": "ffa_score",
     "overall": "overall_score",
-    "support": "donated_troops_total",
+    "support": "support_bonus",
 }
 SORT_FIELDS_BY_VIEW = {
     "team": (
@@ -44,6 +44,7 @@ SORT_FIELDS_BY_VIEW = {
         "overall_score",
         "team_score",
         "ffa_score",
+        "support_bonus",
         "team_win_count",
         "ffa_win_count",
         "win_count",
@@ -81,25 +82,6 @@ def _legacy_team_win_count(aggregate: GuildPlayerAggregate) -> int:
     return aggregate.win_count
 
 
-def _overall_score_value(
-    aggregate: GuildPlayerAggregate,
-    *,
-    team_score: float,
-    ffa_score: float,
-    team_game_count: int,
-    ffa_game_count: int,
-) -> float:
-    if aggregate.overall_score:
-        return float(aggregate.overall_score)
-    if team_game_count and not ffa_game_count:
-        return float(team_score)
-    if ffa_game_count and not team_game_count:
-        return float(ffa_score)
-    if team_game_count and ffa_game_count:
-        return round((team_score * 0.7) + (ffa_score * 0.3), 2)
-    return 0.0
-
-
 def _row_payload(
     aggregate: GuildPlayerAggregate,
     tracked_tags: set[str] | None = None,
@@ -110,15 +92,9 @@ def _row_payload(
     ffa_win_count = aggregate.ffa_win_count
     team_win_rate = team_win_count / team_game_count if team_game_count else 0.0
     ffa_win_rate = ffa_win_count / ffa_game_count if ffa_game_count else 0.0
-    team_score = aggregate.team_score or float(team_win_count * 100)
-    ffa_score = aggregate.ffa_score or float(ffa_win_count * 100)
-    overall_score = _overall_score_value(
-        aggregate,
-        team_score=team_score,
-        ffa_score=ffa_score,
-        team_game_count=team_game_count,
-        ffa_game_count=ffa_game_count,
-    )
+    team_score = float(aggregate.team_score or 0.0)
+    ffa_score = float(aggregate.ffa_score or 0.0)
+    overall_score = float(aggregate.overall_score or 0.0)
     display_username = strip_tracked_clan_tag_prefix(
         aggregate.display_username,
         tracked_tags or set(),
@@ -189,49 +165,107 @@ def build_scoring_response(view: str) -> dict[str, Any]:
     normalized_view = _normalized_view(view)
     summaries = {
         "team": (
-            "Team score rewards winning team games, gives more weight to recent "
-            "results, treats matches with more teams as more difficult so more "
-            "teams count more, and adds a limited support bonus from troop and "
-            "gold donations."
+            "Team score is normalized across the guild. Harder team lobbies and "
+            "recent wins matter most, stacked guild games count less, losses "
+            "subtract, and support bonus adds a visible secondary lift."
         ),
         "ffa": (
-            "FFA score rewards solo results only. It ignores support metrics and "
-            "focuses on Free For All performance."
+            "FFA score is normalized across the guild. Larger solo lobbies and "
+            "recent wins matter more, while losses subtract mildly."
         ),
         "overall": (
-            "Overall score combines separately normalized Team and FFA "
-            "performance, stays Team-first, reduces the impact of a mode "
-            "when the player has only a small sample, and falls back to the "
-            "played mode when the other mode has no games."
+            "Overall score blends normalized Team and FFA performance with a "
+            "Team-first target and confidence damping, so tiny samples do not "
+            "dominate the board."
         ),
         "support": (
-            "Support view focuses on exact troop and gold donations plus related "
-            "support actions in team games."
+            "Support view ranks the visible support bonus first and still shows "
+            "exact troop, gold, and donation action totals from team games."
         ),
+    }
+    details = {
+        "team": {
+            "title": "Exact computation",
+            "sections": [
+                {
+                    "title": "Team result raw",
+                    "lines": [
+                        "recency_weight = 0.4 + 0.6 * 0.5^(days_since_game / 45)",
+                        "team_difficulty = sqrt(max(1, inferred_num_teams - 1))",
+                        "win delta = team_difficulty * recency_weight / sqrt(guild_stack)",
+                        "loss delta = -0.4 * team_difficulty * recency_weight * sqrt(guild_stack)",
+                    ],
+                },
+                {
+                    "title": "Support bonus",
+                    "lines": [
+                        "support volume uses log-scaled troops, gold, and donation actions",
+                        "support bonus is normalized across players with positive support raw",
+                        "team_score = 0.75 * team_result_index + 0.25 * support_bonus",
+                    ],
+                },
+            ],
+        },
+        "ffa": {
+            "title": "Exact computation",
+            "sections": [
+                {
+                    "title": "FFA raw",
+                    "lines": [
+                        "ffa_difficulty = sqrt(max(1, total_player_count - 1))",
+                        "win delta = ffa_difficulty * recency_weight",
+                        "loss delta = -0.25 * ffa_difficulty * recency_weight",
+                        "ffa_score is the normalized FFA raw rank",
+                    ],
+                }
+            ],
+        },
+        "overall": {
+            "title": "Exact computation",
+            "sections": [
+                {
+                    "title": "Overall blend",
+                    "lines": [
+                        "Team and FFA are normalized separately before blending",
+                        "base weights target 70% Team and 30% FFA",
+                        "each mode is damped by confidence = min(1, games / 25)",
+                        "overall_score = blended_mode_score * overall_confidence",
+                    ],
+                }
+            ],
+        },
+        "support": {
+            "title": "Exact computation",
+            "sections": [
+                {
+                    "title": "Support ranking",
+                    "lines": [
+                        "support_bonus is the normalized support component used by Team score",
+                        "support rank uses support bonus first and exact donation totals as extra context",
+                    ],
+                }
+            ],
+        },
     }
     return {
         "view": normalized_view,
         "summary": summaries[normalized_view],
-        "overall_summary": (
-            "Overall targets 70% Team and 30% FFA when both modes have "
-            "meaningful samples, and otherwise falls back to the mode the "
-            "player actually played."
-        ),
+        "details": details[normalized_view],
         "factors": {
             "team": [
                 "Wins matter most.",
-                "Recent matches matter more.",
-                "Matches with more teams count more.",
-                "Support adds a limited bonus.",
+                "Harder lobbies count more.",
+                "Stacked guild games count less.",
+                "Support bonus stays visible.",
             ],
             "ffa": [
                 "FFA ignores support metrics.",
-                "Solo results matter most.",
+                "Bigger solo lobbies count more.",
+                "Losses subtract mildly.",
             ],
             "overall": [
                 "Team and FFA are normalized separately.",
-                "Small samples count less.",
-                "If one mode has no games, Overall falls back to the other mode.",
+                "Small samples count less through confidence damping.",
                 "The target mix is 70% Team and 30% FFA.",
             ],
         },

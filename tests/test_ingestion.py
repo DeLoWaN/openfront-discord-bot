@@ -31,6 +31,70 @@ def test_resolve_effective_clan_tag_prefers_api_then_username_fallback():
     assert empty_resolution.source == "missing"
 
 
+def test_infer_team_count_uses_explicit_numeric_and_named_team_sizes():
+    from src.services.openfront_ingestion import _infer_team_count
+
+    assert _infer_team_count(num_teams=11, player_teams="Duos", total_player_count=60) == 11
+    assert _infer_team_count(num_teams=None, player_teams="5", total_player_count=15) == 5
+    assert _infer_team_count(num_teams=None, player_teams="Duos", total_player_count=24) == 12
+    assert _infer_team_count(num_teams=None, player_teams="Trios", total_player_count=24) == 8
+    assert _infer_team_count(num_teams=None, player_teams="Quads", total_player_count=24) == 6
+    assert _infer_team_count(num_teams=None, player_teams="Duos", total_player_count=25) is None
+    assert _infer_team_count(num_teams=None, player_teams=None, total_player_count=24) is None
+
+
+def test_recency_weight_favors_recent_games_without_zeroing_old_games():
+    from src.services.openfront_ingestion import _game_recency_weight
+
+    now = datetime(2026, 3, 14, 12, 0, 0)
+
+    very_recent = _game_recency_weight(datetime(2026, 3, 14, 11, 0, 0), now=now)
+    medium_age = _game_recency_weight(datetime(2026, 2, 13, 12, 0, 0), now=now)
+    old = _game_recency_weight(datetime(2025, 9, 14, 12, 0, 0), now=now)
+
+    assert very_recent > medium_age > old
+    assert old > 0.0
+
+
+def test_team_result_delta_discounts_stacked_wins_and_amplifies_stacked_losses():
+    from src.services.openfront_ingestion import _team_result_delta
+
+    now = datetime(2026, 3, 14, 12, 0, 0)
+    game_time = datetime(2026, 3, 14, 11, 0, 0)
+
+    solo_win = _team_result_delta(
+        inferred_num_teams=16,
+        did_win=True,
+        guild_stack=1,
+        game_time=game_time,
+        now=now,
+    )
+    stacked_win = _team_result_delta(
+        inferred_num_teams=16,
+        did_win=True,
+        guild_stack=4,
+        game_time=game_time,
+        now=now,
+    )
+    solo_loss = _team_result_delta(
+        inferred_num_teams=16,
+        did_win=False,
+        guild_stack=1,
+        game_time=game_time,
+        now=now,
+    )
+    stacked_loss = _team_result_delta(
+        inferred_num_teams=16,
+        did_win=False,
+        guild_stack=4,
+        game_time=game_time,
+        now=now,
+    )
+
+    assert solo_win > stacked_win > 0.0
+    assert stacked_loss < solo_loss < 0.0
+
+
 def test_ingest_game_payload_persists_guild_relevant_participants_and_aggregates(
     tmp_path,
 ):
@@ -371,7 +435,9 @@ def test_refresh_guild_player_aggregates_falls_back_to_team_score_without_ffa_ga
     )
 
     assert temujin.ffa_game_count == 0
-    assert temujin.overall_score == temujin.team_score
+    assert temujin.team_score <= 1000.0
+    assert temujin.overall_score <= 1000.0
+    assert temujin.overall_score < temujin.team_score
 
 
 def test_ingest_team_payload_tracks_support_metrics_and_mode_specific_aggregates(
@@ -461,6 +527,7 @@ def test_ingest_team_payload_tracks_support_metrics_and_mode_specific_aggregates
     assert support_aggregate.team_win_count == 1
     assert support_aggregate.ffa_game_count == 0
     assert support_aggregate.support_bonus > 0
+    assert support_aggregate.team_score > front_aggregate.team_score
     assert support_aggregate.role_label == "Flexible"
     assert front_aggregate.support_bonus == 0
     assert front_aggregate.role_label == "Flexible"
