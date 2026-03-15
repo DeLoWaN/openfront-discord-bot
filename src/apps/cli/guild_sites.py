@@ -17,6 +17,7 @@ from ...services.guild_sites import (
     set_guild_site_active,
     update_guild_site,
 )
+from ...services.openfront_ingestion import refresh_guild_player_aggregates
 
 
 def _state_label(is_active: object) -> str:
@@ -46,6 +47,10 @@ def _guild_summary(guild: object) -> str:
 
 def _print_guild(guild: object) -> None:
     print(_guild_summary(guild))
+
+
+def _print_refresh_summary(guild: object, refreshed_players: int) -> None:
+    print(f"{_guild_summary(guild)} refreshed_players={refreshed_players}")
 
 
 def _add_selector_arguments(parser: argparse.ArgumentParser) -> None:
@@ -98,6 +103,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     deactivate_parser = subparsers.add_parser("deactivate")
     _add_selector_arguments(deactivate_parser)
+
+    refresh_parser = subparsers.add_parser("refresh-aggregates")
+    _add_selector_arguments(refresh_parser)
 
     delete_parser = subparsers.add_parser("delete")
     _add_selector_arguments(delete_parser)
@@ -178,6 +186,14 @@ def run_command(args: argparse.Namespace) -> int:
     if command == "deactivate":
         guild = set_guild_site_active(selector, is_active=False)
         _print_guild(guild)
+        return 0
+
+    if command == "refresh-aggregates":
+        guild = get_guild_site(selector)
+        if guild is None:
+            raise ValueError("Guild site not found")
+        refreshed = refresh_guild_player_aggregates(guild)
+        _print_refresh_summary(guild, len(refreshed))
         return 0
 
     if command == "delete":

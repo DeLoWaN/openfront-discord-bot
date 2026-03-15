@@ -46,14 +46,11 @@ def _leaderboard_columns(view: str) -> tuple[LeaderboardColumn, ...]:
     if view == "team":
         return (
             ("Team Score", lambda row: _format_table_value(row["team_score"])),
-            ("Support Bonus", lambda row: _format_table_value(row["support_bonus"])),
             ("Wins", lambda row: _format_table_value(row["team_win_count"])),
             ("Win Rate", lambda row: _format_percent(row["team_win_rate"])),
             ("Games", lambda row: _format_table_value(row["team_game_count"])),
-            (
-                "Troops Donated",
-                lambda row: _format_table_value(row["donated_troops_total"]),
-            ),
+            ("Games 30d", lambda row: _format_table_value(row["team_recent_game_count_30d"])),
+            ("Support Bonus", lambda row: _format_table_value(row["support_bonus"])),
             ("Role", lambda row: _format_table_value(row["role_label"])),
         )
     if view == "ffa":
@@ -62,15 +59,7 @@ def _leaderboard_columns(view: str) -> tuple[LeaderboardColumn, ...]:
             ("Wins", lambda row: _format_table_value(row["ffa_win_count"])),
             ("Win Rate", lambda row: _format_percent(row["ffa_win_rate"])),
             ("Games", lambda row: _format_table_value(row["ffa_game_count"])),
-        )
-    if view == "overall":
-        return (
-            ("Overall Score", lambda row: _format_table_value(row["overall_score"])),
-            ("Team Score", lambda row: _format_table_value(row["team_score"])),
-            ("FFA Score", lambda row: _format_table_value(row["ffa_score"])),
-            ("Support Bonus", lambda row: _format_table_value(row["support_bonus"])),
-            ("Team Games", lambda row: _format_table_value(row["team_game_count"])),
-            ("FFA Games", lambda row: _format_table_value(row["ffa_game_count"])),
+            ("Games 30d", lambda row: _format_table_value(row["ffa_recent_game_count_30d"])),
         )
     if view == "support":
         return (
@@ -84,7 +73,10 @@ def _leaderboard_columns(view: str) -> tuple[LeaderboardColumn, ...]:
                 "Donation Actions",
                 lambda row: _format_table_value(row["donation_action_count"]),
             ),
-            ("Team Games", lambda row: _format_table_value(row["team_game_count"])),
+            (
+                "Games 30d",
+                lambda row: _format_table_value(row["support_recent_game_count_30d"]),
+            ),
             ("Role", lambda row: _format_table_value(row["role_label"])),
         )
     raise ValueError(f"Unsupported leaderboard view: {view}")
@@ -223,10 +215,10 @@ def create_app(
         return get_site_user(site_user_id)
 
     def resolve_leaderboard_view(view: str):
-        try:
-            return str(view or "").strip().lower() or "team"
-        except Exception as exc:  # pragma: no cover - defensive fallback
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        normalized = str(view or "").strip().lower() or "team"
+        if normalized not in SUPPORTED_VIEWS:
+            raise HTTPException(status_code=404, detail=f"Unsupported leaderboard view: {view}")
+        return normalized
 
     @app.get("/", response_class=HTMLResponse)
     async def guild_home(request: Request) -> HTMLResponse:
@@ -484,6 +476,8 @@ def create_app(
           <p><strong>Wins:</strong> {sections["team"]["wins"]}</p>
           <p><strong>Games:</strong> {sections["team"]["games"]}</p>
           <p><strong>Win rate:</strong> {sections["team"]["win_rate"]}</p>
+          <p><strong>Games in the last 30 days:</strong> {sections["team"]["recent_games_30d"]}</p>
+          <p><strong>Last Team game:</strong> {escape(str(sections["team"]["last_game_at"] or "-"))}</p>
         </section>
         <section>
           <h2>FFA</h2>
@@ -491,12 +485,8 @@ def create_app(
           <p><strong>Wins:</strong> {sections["ffa"]["wins"]}</p>
           <p><strong>Games:</strong> {sections["ffa"]["games"]}</p>
           <p><strong>Win rate:</strong> {sections["ffa"]["win_rate"]}</p>
-        </section>
-        <section>
-          <h2>Overall</h2>
-          <p><strong>Score:</strong> {sections["overall"]["score"]}</p>
-          <p><strong>Guild wins:</strong> {player["win_count"]}</p>
-          <p><strong>Guild games:</strong> {player["game_count"]}</p>
+          <p><strong>Games in the last 30 days:</strong> {sections["ffa"]["recent_games_30d"]}</p>
+          <p><strong>Last FFA game:</strong> {escape(str(sections["ffa"]["last_game_at"] or "-"))}</p>
         </section>
         <section>
           <h2>Support</h2>
@@ -504,6 +494,7 @@ def create_app(
           <p><strong>Gold donated:</strong> {sections["support"]["gold_donated"]}</p>
           <p><strong>Donation actions:</strong> {sections["support"]["donation_actions"]}</p>
           <p><strong>Support bonus:</strong> {sections["support"]["support_bonus"]}</p>
+          <p><strong>Games in the last 30 days:</strong> {sections["support"]["recent_games_30d"]}</p>
           <p><strong>Role:</strong> {escape(sections["support"]["role_label"])}</p>
         </section>
         <section>

@@ -1,9 +1,7 @@
-# guild-stats-api Specification
+# guild-stats-api Delta
 
-## Purpose
+## MODIFIED Requirements
 
-Define the guild-scoped JSON contracts used by the public guild website.
-## Requirements
 ### Requirement: Expose guild-scoped leaderboard API views
 
 The system SHALL expose machine-readable guild-scoped leaderboard endpoints for
@@ -68,17 +66,7 @@ instead of being integrated into the score itself.
 - **THEN** the response states that FFA is scored separately and does not use
   support metrics
 
-### Requirement: Expose guild-scoped public player names without tracked tags
-
-The system SHALL expose player-name fields for public guild views using the
-guild-aware public display name rather than the raw observed username.
-
-#### Scenario: Client requests leaderboard row for tracked-tag variant
-
-- **WHEN** a leaderboard row represents an observed player whose raw username
-  includes a tracked guild clan-tag prefix
-- **THEN** the API response exposes the stripped public player name instead of
-  the raw tagged username
+## ADDED Requirements
 
 ### Requirement: Expose recent-activity metadata beside cumulative scores
 

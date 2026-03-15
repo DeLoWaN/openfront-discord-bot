@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from peewee import SqliteDatabase
 
 
@@ -48,7 +50,8 @@ def test_build_leaderboard_rows_for_competitive_views(tmp_path):
         ffa_game_count=2,
         team_score=260.0,
         ffa_score=70.0,
-        overall_score=203.0,
+        team_recent_game_count_30d=4,
+        ffa_recent_game_count_30d=1,
         donated_troops_total=1000,
         donated_gold_total=0,
         donation_action_count=1,
@@ -56,6 +59,9 @@ def test_build_leaderboard_rows_for_competitive_views(tmp_path):
         attack_troops_total=250000,
         attack_action_count=8,
         role_label="Frontliner",
+        last_team_game_at=datetime(2026, 3, 14, 10, 0, 0),
+        last_ffa_game_at=datetime(2026, 3, 13, 12, 0, 0),
+        last_game_at=datetime(2026, 3, 14, 10, 0, 0),
     )
     GuildPlayerAggregate.create(
         guild=guild,
@@ -71,7 +77,8 @@ def test_build_leaderboard_rows_for_competitive_views(tmp_path):
         ffa_game_count=4,
         team_score=220.0,
         ffa_score=90.0,
-        overall_score=181.0,
+        team_recent_game_count_30d=6,
+        ffa_recent_game_count_30d=2,
         donated_troops_total=800000,
         donated_gold_total=250000,
         donation_action_count=9,
@@ -79,32 +86,34 @@ def test_build_leaderboard_rows_for_competitive_views(tmp_path):
         attack_troops_total=50000,
         attack_action_count=2,
         role_label="Backliner",
+        last_team_game_at=datetime(2026, 3, 14, 11, 0, 0),
+        last_ffa_game_at=datetime(2026, 3, 10, 12, 0, 0),
+        last_game_at=datetime(2026, 3, 14, 11, 0, 0),
     )
 
     team = build_leaderboard_response(guild, "team")
     ffa = build_leaderboard_response(guild, "ffa")
-    overall = build_leaderboard_response(guild, "overall")
     support = build_leaderboard_response(guild, "support")
     scoring = build_scoring_response("team")
-    overall_scoring = build_scoring_response("overall")
+    support_scoring = build_scoring_response("support")
 
     assert team["view"] == "team"
     assert team["default_sort"] == "team_score"
     assert team["rows"][0]["display_username"] == "Ace"
     assert team["rows"][1]["state"] == "Linked"
+    assert team["rows"][0]["team_recent_game_count_30d"] == 4
     assert ffa["rows"][0]["display_username"] == "Bolt"
-    assert overall["rows"][0]["display_username"] == "Ace"
-    assert "support_bonus" in overall["rows"][0]
     assert support["default_sort"] == "support_bonus"
     assert support["rows"][0]["display_username"] == "Bolt"
     assert support["rows"][0]["role_label"] == "Backliner"
+    assert support["rows"][0]["support_recent_game_count_30d"] == 6
     assert "support bonus" in scoring["summary"].lower()
     assert scoring["details"]["title"] == "Exact computation"
-    assert "confidence" in overall_scoring["summary"].lower()
+    assert "recent activity" in scoring["summary"].lower()
+    assert "donation" in support_scoring["summary"].lower()
 
 
-def test_build_leaderboard_overall_keeps_single_mode_rows_on_normalized_scale(tmp_path):
-    from src.data.shared.models import GuildPlayerAggregate
+def test_build_leaderboard_rejects_removed_overall_view(tmp_path):
     from src.services.guild_sites import provision_guild_site
     from src.services.guild_stats_api import build_leaderboard_response
 
@@ -115,30 +124,9 @@ def test_build_leaderboard_overall_keeps_single_mode_rows_on_normalized_scale(tm
         display_name="North Guild",
         clan_tags=["NU"],
     )
-    GuildPlayerAggregate.create(
-        guild=guild,
-        normalized_username="temujin",
-        display_username="[NU] Temujin",
-        last_observed_clan_tag="NU",
-        win_count=9,
-        game_count=22,
-        team_win_count=9,
-        team_game_count=22,
-        ffa_win_count=0,
-        ffa_game_count=0,
-        team_score=980.97,
-        ffa_score=0.0,
-        overall_score=0.0,
-        donated_troops_total=0,
-        donated_gold_total=0,
-        donation_action_count=0,
-        support_bonus=0.0,
-        attack_troops_total=1000,
-        attack_action_count=1,
-        role_label="Frontliner",
-    )
-
-    overall = build_leaderboard_response(guild, "overall")
-
-    assert overall["rows"][0]["display_username"] == "Temujin"
-    assert overall["rows"][0]["overall_score"] == 0.0
+    try:
+        build_leaderboard_response(guild, "overall")
+    except ValueError as exc:
+        assert "Unsupported leaderboard view" in str(exc)
+    else:  # pragma: no cover - defensive failure branch
+        assert False, "overall view should be rejected"

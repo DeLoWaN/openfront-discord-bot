@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from peewee import SqliteDatabase
 
 
@@ -41,7 +43,8 @@ def make_client(tmp_path):
         ffa_game_count=2,
         team_score=220.0,
         ffa_score=70.0,
-        overall_score=175.0,
+        team_recent_game_count_30d=5,
+        ffa_recent_game_count_30d=1,
         donated_troops_total=1200,
         donated_gold_total=50,
         donation_action_count=2,
@@ -49,6 +52,9 @@ def make_client(tmp_path):
         attack_troops_total=8000,
         attack_action_count=9,
         role_label="Hybrid",
+        last_team_game_at=datetime(2026, 3, 14, 11, 0, 0),
+        last_ffa_game_at=datetime(2026, 3, 10, 12, 0, 0),
+        last_game_at=datetime(2026, 3, 14, 11, 0, 0),
     )
     GuildPlayerAggregate.create(
         guild=guild,
@@ -63,7 +69,8 @@ def make_client(tmp_path):
         ffa_game_count=2,
         team_score=260.0,
         ffa_score=80.0,
-        overall_score=206.0,
+        team_recent_game_count_30d=3,
+        ffa_recent_game_count_30d=1,
         donated_troops_total=500,
         donated_gold_total=10,
         donation_action_count=1,
@@ -71,6 +78,9 @@ def make_client(tmp_path):
         attack_troops_total=12000,
         attack_action_count=14,
         role_label="Frontliner",
+        last_team_game_at=datetime(2026, 3, 13, 18, 0, 0),
+        last_ffa_game_at=datetime(2026, 3, 9, 14, 0, 0),
+        last_game_at=datetime(2026, 3, 13, 18, 0, 0),
     )
     return create_app()
 
@@ -128,12 +138,11 @@ def test_leaderboard_uses_view_specific_default_columns(tmp_path):
     assert "<th>Wins</th>" in team.text
     assert "<th>Win Rate</th>" in team.text
     assert "<th>Games</th>" in team.text
-    assert "<th>Troops Donated</th>" in team.text
+    assert "<th>Games 30d</th>" in team.text
     assert "<th>Support Bonus</th>" in team.text
     assert "<th>Role</th>" in team.text
     assert "<th>Primary Metric</th>" not in team.text
     assert "260.0" in team.text
-    assert "500" in team.text
     assert "Frontliner" in team.text
 
     assert ffa.status_code == 200
@@ -141,28 +150,19 @@ def test_leaderboard_uses_view_specific_default_columns(tmp_path):
     assert "<th>Wins</th>" in ffa.text
     assert "<th>Win Rate</th>" in ffa.text
     assert "<th>Games</th>" in ffa.text
+    assert "<th>Games 30d</th>" in ffa.text
     assert "<th>Troops Donated</th>" not in ffa.text
     assert "<th>Support Bonus</th>" not in ffa.text
     assert "80.0" in ffa.text
 
-    assert overall.status_code == 200
-    assert "<th>Overall Score</th>" in overall.text
-    assert "<th>Team Score</th>" in overall.text
-    assert "<th>FFA Score</th>" in overall.text
-    assert "<th>Support Bonus</th>" in overall.text
-    assert "<th>Team Games</th>" in overall.text
-    assert "<th>FFA Games</th>" in overall.text
-    assert "<th>Role</th>" not in overall.text
-    assert "206.0" in overall.text
-    assert "260.0" in overall.text
-    assert "80.0" in overall.text
+    assert overall.status_code == 404
 
     assert support.status_code == 200
     assert "<th>Troops Donated</th>" in support.text
     assert "<th>Gold Donated</th>" in support.text
     assert "<th>Donation Actions</th>" in support.text
     assert "<th>Support Bonus</th>" in support.text
-    assert "<th>Team Games</th>" in support.text
+    assert "<th>Games 30d</th>" in support.text
     assert "<th>Role</th>" in support.text
     assert "<th>Primary Metric</th>" not in support.text
     assert "50" in support.text
@@ -181,10 +181,6 @@ def test_leaderboard_shows_overall_weighting_copy_only_on_overall_view(tmp_path)
         "/leaderboard?view=ffa",
         headers={"host": "north.example.test"},
     )
-    overall = client.get(
-        "/leaderboard?view=overall",
-        headers={"host": "north.example.test"},
-    )
     support = client.get(
         "/leaderboard?view=support",
         headers={"host": "north.example.test"},
@@ -192,10 +188,10 @@ def test_leaderboard_shows_overall_weighting_copy_only_on_overall_view(tmp_path)
 
     assert "Exact computation" in team.text
     assert "Exact computation" in ffa.text
-    assert "Exact computation" in overall.text
     assert "Exact computation" in support.text
     assert "support bonus" in team.text.lower()
-    assert "confidence" in overall.text.lower()
+    assert "recent activity" in team.text.lower()
+    assert "donation" in support.text.lower()
 
 
 def test_player_profile_page_is_public_for_observed_and_linked_entries(tmp_path):
@@ -212,13 +208,13 @@ def test_player_profile_page_is_public_for_observed_and_linked_entries(tmp_path)
     assert "Observed player" in observed.text
     assert "<h2>Team</h2>" in observed.text
     assert "<h2>FFA</h2>" in observed.text
-    assert "<h2>Overall</h2>" in observed.text
     assert "<h2>Support</h2>" in observed.text
+    assert "Games in the last 30 days" in observed.text
     assert linked.status_code == 200
     assert "Bolt" in linked.text
     assert "[NU] Bolt" not in linked.text
     assert "Linked player" in linked.text
     assert "<h2>Team</h2>" in linked.text
     assert "<h2>FFA</h2>" in linked.text
-    assert "<h2>Overall</h2>" in linked.text
     assert "<h2>Support</h2>" in linked.text
+    assert "Games in the last 30 days" in linked.text

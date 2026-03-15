@@ -337,6 +337,13 @@ Delete a guild site permanently:
 ./guild-sites delete --subdomain wolves --confirm
 ```
 
+Force one guild to rebuild its stored leaderboard aggregates from the existing
+raw observations:
+
+```bash
+./guild-sites refresh-aggregates --slug north-guild
+```
+
 ### Step 4: Run the web app locally
 
 There is no packaged web runner yet, but the FastAPI app factory is ready.
@@ -488,14 +495,18 @@ The implemented public web surface currently supports:
 Important behavior rules:
 
 - observed players are keyed by `(guild_id, normalized_username)`
+- leaderboard scores do not recompute on web startup; use
+  `./guild-sites refresh-aggregates --slug <slug>` after scoring changes when
+  the raw observations are already present
 - clan tag matching prefers API `clanTag` and falls back to `[TAG]` in username
 - exact aliases from linked player history are associated; fuzzy matching is not
   used
 - linked profiles show global OpenFront wins separately from guild-scoped stats
-- Team score rewards wins most, gives more weight to recent results, counts
-  matches with more teams as harder, and adds a limited support bonus from
-  exact troop and gold donations
-- Overall score combines `70% Team` and `30% FFA`
+- Team score is normalized per guild, discounts stacked guild wins, subtracts
+  Team losses, and adds a visible support bonus from exact troop and gold
+  donations
+- Overall score blends normalized `Team` and `FFA` performance with a `70/30`
+  target and confidence damping
 
 ## Discord bot commands
 

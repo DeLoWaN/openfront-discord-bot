@@ -1,14 +1,18 @@
 {
   "player_count": 3833,
-  "top_team_player": "LeVi",
-  "top_support_player": "Tobberr",
-  "allowed_top_overall_players": [
-    "Kazz"
+  "allowed_top_team_players": [
+    "Nuke Party",
+    "Tobberr",
+    "Temujin"
   ],
+  "top_support_player": "Tobberr",
+  "small_sample_player": "Macron",
+  "min_temujin_team_score": 6500,
+  "max_temujin_team_rank": 5,
   "support_order_pairs": [
     [
       "Tobberr",
-      "Restart"
+      "Nuke Party"
     ],
     [
       "CENTCOM",

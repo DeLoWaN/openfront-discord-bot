@@ -3,9 +3,7 @@
 ## Purpose
 
 Define the public guild site routing and presentation behavior.
-
 ## Requirements
-
 ### Requirement: Manually provisioned guild sites
 
 The system SHALL support manually provisioned guild sites, each with a unique
@@ -54,12 +52,13 @@ and public player profiles.
 ### Requirement: Expose competitive leaderboard navigation
 
 The system SHALL provide public navigation from each guild site to the `Team`,
-`FFA`, `Overall`, and `Support` leaderboard views.
+`FFA`, and `Support` leaderboard views. The site SHALL NOT expose an `Overall`
+leaderboard view.
 
 #### Scenario: Visitor opens guild leaderboard navigation
 
 - **WHEN** a visitor opens a guild site with leaderboard access
-- **THEN** the site shows navigation to Team, FFA, Overall, and Support views
+- **THEN** the site shows navigation to Team, FFA, and Support views
 
 #### Scenario: Visitor switches leaderboard views
 
@@ -71,7 +70,9 @@ The system SHALL provide public navigation from each guild site to the `Team`,
 
 The public website SHALL render leaderboard and player profile views from
 backend-provided data contracts and SHALL NOT require the frontend to
-recalculate leaderboard scores.
+recalculate leaderboard scores. The public site SHALL present recent activity
+beside the cumulative score so visitors can distinguish historical guild
+anchors from currently active players without changing score semantics.
 
 #### Scenario: Frontend renders leaderboard rows
 
@@ -103,3 +104,22 @@ profile views without tracked guild clan-tag prefixes.
 - **WHEN** the backend returns a public player name for a guild player profile
 - **THEN** the profile renders that stripped public player name and does not
   append the tracked clan tag next to it
+
+### Requirement: Surface recent activity as context instead of score decay
+
+The public website SHALL display recent-activity context for Team, FFA, and
+Support views without expressing that context as score decay. The site MAY use
+fields such as `Games 30d`, `Last Team Game`, or an `Active` badge, but it
+MUST keep the cumulative score meaning separate from recent activity.
+
+#### Scenario: Visitor views Team leaderboard row
+
+- **WHEN** the Team leaderboard renders a player row
+- **THEN** the site shows recent activity beside the Team score instead of
+  implying that inactivity directly reduced the score
+
+#### Scenario: Visitor views player profile
+
+- **WHEN** a player profile is rendered
+- **THEN** the site shows recent Team and FFA activity alongside the
+  cumulative score sections

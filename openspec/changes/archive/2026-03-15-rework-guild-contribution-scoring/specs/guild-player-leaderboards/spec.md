@@ -1,10 +1,7 @@
-# guild-player-leaderboards Specification
+# guild-player-leaderboards Delta
 
-## Purpose
+## MODIFIED Requirements
 
-Define the guild-scoped public leaderboard and player profile behavior for the
-competitive web experience.
-## Requirements
 ### Requirement: Build guild leaderboards from guild-relevant games
 
 The system SHALL build each guild leaderboard only from observed public
@@ -75,34 +72,6 @@ The default visible columns SHALL be:
 - **THEN** the leaderboard reorders the same guild-scoped player rows by that
   metric and shows support-focused columns plus recent activity
 
-### Requirement: Publish descriptive team role labels
-
-The system SHALL expose player-facing Team role labels that describe a
-player's dominant observed Team play style rather than reacting to isolated
-support actions. When leaderboard or profile views show a Team role label, a
-player who mostly fronts across a meaningful Team sample MUST remain
-`Frontliner` even if some games include donations. Players whose Team sample is
-too small or too mixed to support a stable dominant style SHALL render the
-existing fallback label `Flexible`.
-
-#### Scenario: Mostly-frontline player appears on Team leaderboard
-
-- **WHEN** a player appears on a guild Team or Support leaderboard after mostly
-  playing frontline games with occasional donations
-- **THEN** the displayed role label is `Frontliner`
-
-#### Scenario: Small-sample player appears on public profile
-
-- **WHEN** a player's observed Team history is too small to support a stable
-  role classification
-- **THEN** the public leaderboard and player profile show `Flexible`
-
-#### Scenario: Mixed-style player appears on Team leaderboard
-
-- **WHEN** a player's observed Team history does not show a clear dominant
-  frontline or backline style
-- **THEN** the displayed role label is `Hybrid`
-
 ### Requirement: Expose public guild player profiles
 
 The system SHALL expose a public player profile page within each guild site for
@@ -145,24 +114,6 @@ activity context and SHALL NOT describe recency as a direct score factor.
 - **WHEN** a visitor opens scoring help for the FFA leaderboard
 - **THEN** the page explains that FFA is scored separately from Team and does
   not use support metrics
-
-### Requirement: Hide tracked clan tags from public player names
-
-The system SHALL not render tracked guild clan-tag prefixes as part of the
-public player name on guild leaderboard or player-profile pages.
-
-#### Scenario: Observed player uses tracked tag prefix
-
-- **WHEN** an observed player's raw username is `[NU] Temujin` and `NU` is a
-  tracked clan tag for the guild
-- **THEN** the public leaderboard and player profile render the player name as
-  `Temujin`
-
-#### Scenario: Raw username uses untracked prefix
-
-- **WHEN** an observed player's raw username starts with a prefix that is not a
-  tracked clan tag for the guild
-- **THEN** the system does not strip that prefix solely for public display
 
 ### Requirement: Reward team support without penalizing frontliners
 

@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from fastapi.testclient import TestClient
 from peewee import SqliteDatabase
 
@@ -34,7 +36,8 @@ def make_client(tmp_path):
         ffa_game_count=2,
         team_score=260.0,
         ffa_score=70.0,
-        overall_score=203.0,
+        team_recent_game_count_30d=4,
+        ffa_recent_game_count_30d=1,
         donated_troops_total=1000,
         donated_gold_total=0,
         donation_action_count=1,
@@ -42,6 +45,9 @@ def make_client(tmp_path):
         attack_troops_total=250000,
         attack_action_count=8,
         role_label="Frontliner",
+        last_team_game_at=datetime(2026, 3, 14, 10, 0, 0),
+        last_ffa_game_at=datetime(2026, 3, 13, 12, 0, 0),
+        last_game_at=datetime(2026, 3, 14, 10, 0, 0),
     )
     return TestClient(create_app())
 
@@ -61,14 +67,26 @@ def test_guild_stats_api_exposes_leaderboard_and_scoring_payloads(tmp_path):
         "/api/players/ace",
         headers={"host": "north.example.test"},
     )
+    missing_view = client.get(
+        "/api/leaderboards/overall",
+        headers={"host": "north.example.test"},
+    )
 
     assert leaderboard.status_code == 200
     assert leaderboard.json()["view"] == "team"
     assert leaderboard.json()["rows"][0]["display_username"] == "Ace"
+    assert leaderboard.json()["rows"][0]["team_recent_game_count_30d"] == 4
+    assert leaderboard.json()["rows"][0]["support_recent_game_count_30d"] == 4
+    assert "overall_score" not in leaderboard.json()["rows"][0]
     assert "[NU] Ace" not in leaderboard.text
     assert scoring.status_code == 200
     assert "summary" in scoring.json()
     assert scoring.json()["details"]["title"] == "Exact computation"
+    assert "recent activity" in scoring.json()["summary"].lower()
     assert profile.status_code == 200
     assert profile.json()["player"]["display_username"] == "Ace"
     assert profile.json()["player"]["team_score"] == 260.0
+    assert profile.json()["player"]["team_recent_game_count_30d"] == 4
+    assert profile.json()["sections"]["team"]["recent_games_30d"] == 4
+    assert "overall" not in profile.json()["sections"]
+    assert missing_view.status_code == 404

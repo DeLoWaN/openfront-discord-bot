@@ -122,6 +122,16 @@ def run_shared_migrations(database) -> None:
         ("guild_player_aggregates", "ffa_score", "DOUBLE NOT NULL DEFAULT 0"),
         ("guild_player_aggregates", "overall_score", "DOUBLE NOT NULL DEFAULT 0"),
         ("guild_player_aggregates", "role_label", "VARCHAR(255) NULL"),
+        (
+            "guild_player_aggregates",
+            "team_recent_game_count_30d",
+            "INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "guild_player_aggregates",
+            "ffa_recent_game_count_30d",
+            "INTEGER NOT NULL DEFAULT 0",
+        ),
         ("guild_player_aggregates", "last_team_game_at", "DATETIME NULL"),
         ("guild_player_aggregates", "last_ffa_game_at", "DATETIME NULL"),
     )

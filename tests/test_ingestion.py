@@ -43,56 +43,26 @@ def test_infer_team_count_uses_explicit_numeric_and_named_team_sizes():
     assert _infer_team_count(num_teams=None, player_teams=None, total_player_count=24) is None
 
 
-def test_recency_weight_favors_recent_games_without_zeroing_old_games():
-    from src.services.openfront_ingestion import _game_recency_weight
+def test_team_difficulty_weight_grows_monotonically_past_ten_teams():
+    from src.services.openfront_ingestion import _team_difficulty_weight
 
-    now = datetime(2026, 3, 14, 12, 0, 0)
+    four_team = _team_difficulty_weight(4)
+    ten_team = _team_difficulty_weight(10)
+    sixty_team = _team_difficulty_weight(60)
 
-    very_recent = _game_recency_weight(datetime(2026, 3, 14, 11, 0, 0), now=now)
-    medium_age = _game_recency_weight(datetime(2026, 2, 13, 12, 0, 0), now=now)
-    old = _game_recency_weight(datetime(2025, 9, 14, 12, 0, 0), now=now)
-
-    assert very_recent > medium_age > old
-    assert old > 0.0
+    assert four_team > 1.0
+    assert ten_team > four_team
+    assert sixty_team > ten_team
 
 
-def test_team_result_delta_discounts_stacked_wins_and_amplifies_stacked_losses():
-    from src.services.openfront_ingestion import _team_result_delta
+def test_team_game_points_reward_wins_without_subtracting_losses():
+    from src.services.openfront_ingestion import _team_game_points
 
-    now = datetime(2026, 3, 14, 12, 0, 0)
-    game_time = datetime(2026, 3, 14, 11, 0, 0)
+    loss_points = _team_game_points(inferred_num_teams=12, did_win=False)
+    win_points = _team_game_points(inferred_num_teams=12, did_win=True)
 
-    solo_win = _team_result_delta(
-        inferred_num_teams=16,
-        did_win=True,
-        guild_stack=1,
-        game_time=game_time,
-        now=now,
-    )
-    stacked_win = _team_result_delta(
-        inferred_num_teams=16,
-        did_win=True,
-        guild_stack=4,
-        game_time=game_time,
-        now=now,
-    )
-    solo_loss = _team_result_delta(
-        inferred_num_teams=16,
-        did_win=False,
-        guild_stack=1,
-        game_time=game_time,
-        now=now,
-    )
-    stacked_loss = _team_result_delta(
-        inferred_num_teams=16,
-        did_win=False,
-        guild_stack=4,
-        game_time=game_time,
-        now=now,
-    )
-
-    assert solo_win > stacked_win > 0.0
-    assert stacked_loss < solo_loss < 0.0
+    assert loss_points > 0.0
+    assert win_points > loss_points
 
 
 def test_ingest_game_payload_persists_guild_relevant_participants_and_aggregates(
@@ -301,7 +271,7 @@ def test_refresh_guild_player_aggregates_merges_tracked_tag_variants_only(
     assert untracked.game_count == 1
 
 
-def test_refresh_guild_player_aggregates_weights_overall_score_by_mode_confidence(
+def test_refresh_guild_player_aggregates_rewards_high_participation_over_tiny_perfect_samples(
     tmp_path,
 ):
     from src.data.shared.models import GameParticipant, GuildPlayerAggregate, ObservedGame
@@ -319,17 +289,17 @@ def test_refresh_guild_player_aggregates_weights_overall_score_by_mode_confidenc
     def create_participant(
         *,
         game_id: str,
-        mode_name: str,
         username: str,
         did_win: int,
         ended_at: datetime,
+        num_teams: int = 4,
     ) -> None:
         game = ObservedGame.create(
             openfront_game_id=game_id,
             game_type="PUBLIC",
-            mode_name=mode_name,
-            num_teams=4 if mode_name == "Team" else None,
-            total_player_count=100 if mode_name == "Free For All" else 8,
+            mode_name="Team",
+            num_teams=num_teams,
+            total_player_count=num_teams * 2,
             ended_at=ended_at,
         )
         GameParticipant.create(
@@ -344,56 +314,40 @@ def test_refresh_guild_player_aggregates_weights_overall_score_by_mode_confidenc
             did_win=did_win,
         )
 
-    for index in range(60):
+    for index in range(120):
         create_participant(
-            game_id=f"team-king-{index}",
-            mode_name="Team",
-            username="TeamKing",
+            game_id=f"veteran-{index}",
+            username="Veteran",
+            did_win=1 if index < 48 else 0,
+            ended_at=datetime(2026, 3, 1, 12, 0, 0),
+            num_teams=18,
+        )
+    for index in range(10):
+        create_participant(
+            game_id=f"sprinter-{index}",
+            username="Sprinter",
             did_win=1,
             ended_at=datetime(2026, 3, 1, 12, 0, 0),
-        )
-    for index in range(5):
-        create_participant(
-            game_id=f"team-solo-{index}",
-            mode_name="Team",
-            username="SoloAce",
-            did_win=0,
-            ended_at=datetime(2026, 3, 1, 12, 0, 0),
-        )
-    for index in range(2):
-        create_participant(
-            game_id=f"ffa-king-{index}",
-            mode_name="Free For All",
-            username="TeamKing",
-            did_win=0,
-            ended_at=datetime(2026, 3, 1, 12, 0, 0),
-        )
-    for index in range(60):
-        create_participant(
-            game_id=f"ffa-solo-{index}",
-            mode_name="Free For All",
-            username="SoloAce",
-            did_win=1,
-            ended_at=datetime(2026, 3, 1, 12, 0, 0),
+            num_teams=18,
         )
 
     refresh_guild_player_aggregates(guild)
 
-    team_king = GuildPlayerAggregate.get(
-        GuildPlayerAggregate.normalized_username == "teamking"
+    veteran = GuildPlayerAggregate.get(
+        GuildPlayerAggregate.normalized_username == "veteran"
     )
-    solo_ace = GuildPlayerAggregate.get(
-        GuildPlayerAggregate.normalized_username == "soloace"
+    sprinter = GuildPlayerAggregate.get(
+        GuildPlayerAggregate.normalized_username == "sprinter"
     )
-    team_king_raw_overall = round((team_king.team_score * 0.7) + (team_king.ffa_score * 0.3), 2)
 
-    assert team_king.team_score > solo_ace.team_score
-    assert solo_ace.ffa_score > team_king.ffa_score
-    assert team_king.overall_score != team_king_raw_overall
-    assert team_king.overall_score > solo_ace.overall_score
+    assert veteran.team_game_count == 120
+    assert sprinter.team_game_count == 10
+    assert veteran.team_score > sprinter.team_score
+    assert veteran.team_score > 0
+    assert sprinter.team_score > 0
 
 
-def test_refresh_guild_player_aggregates_falls_back_to_team_score_without_ffa_games(
+def test_refresh_guild_player_aggregates_tracks_recent_activity_without_score_decay(
     tmp_path,
 ):
     from src.data.shared.models import GameParticipant, GuildPlayerAggregate, ObservedGame
@@ -408,13 +362,19 @@ def test_refresh_guild_player_aggregates_falls_back_to_team_score_without_ffa_ga
         clan_tags=["NU"],
     )
 
-    for index in range(12):
+    old_time = datetime(2026, 1, 1, 12, 0, 0)
+    recent_times = [
+        datetime(2026, 3, 14, 12, 0, 0),
+        datetime(2026, 3, 10, 12, 0, 0),
+    ]
+
+    for index, ended_at in enumerate([old_time, *recent_times]):
         game = ObservedGame.create(
-            openfront_game_id=f"team-only-{index}",
+            openfront_game_id=f"team-recency-{index}",
             game_type="PUBLIC",
             mode_name="Team",
-            num_teams=4,
-            ended_at=datetime(2026, 3, 1, 12, 0, 0),
+            num_teams=12,
+            ended_at=ended_at,
         )
         GameParticipant.create(
             game=game,
@@ -424,8 +384,8 @@ def test_refresh_guild_player_aggregates_falls_back_to_team_score_without_ffa_ga
             raw_clan_tag="NU",
             effective_clan_tag="NU",
             clan_tag_source="api",
-            client_id=f"team-only-{index}",
-            did_win=1,
+            client_id=f"team-recency-{index}",
+            did_win=1 if index == 0 else 0,
         )
 
     refresh_guild_player_aggregates(guild)
@@ -435,9 +395,56 @@ def test_refresh_guild_player_aggregates_falls_back_to_team_score_without_ffa_ga
     )
 
     assert temujin.ffa_game_count == 0
-    assert temujin.team_score <= 1000.0
-    assert temujin.overall_score <= 1000.0
-    assert temujin.overall_score < temujin.team_score
+    assert temujin.team_game_count == 3
+    assert temujin.team_recent_game_count_30d == 2
+    assert temujin.last_team_game_at == recent_times[0]
+    assert temujin.team_score > 0
+
+
+def test_refresh_guild_player_aggregates_values_larger_team_lobbies_more_highly(tmp_path):
+    from src.data.shared.models import GameParticipant, GuildPlayerAggregate, ObservedGame
+    from src.services.guild_sites import provision_guild_site
+    from src.services.openfront_ingestion import refresh_guild_player_aggregates
+
+    setup_shared_database(tmp_path)
+    guild = provision_guild_site(
+        slug="north",
+        subdomain="north",
+        display_name="North",
+        clan_tags=["NU"],
+    )
+
+    for username, num_teams in (("TenTeams", 10), ("SixtyTeams", 60)):
+        game = ObservedGame.create(
+            openfront_game_id=f"{username}-{num_teams}",
+            game_type="PUBLIC",
+            mode_name="Team",
+            num_teams=num_teams,
+            total_player_count=num_teams * 2,
+            ended_at=datetime(2026, 3, 1, 12, 0, 0),
+        )
+        GameParticipant.create(
+            game=game,
+            guild=guild,
+            raw_username=username,
+            normalized_username=username.lower(),
+            raw_clan_tag="NU",
+            effective_clan_tag="NU",
+            clan_tag_source="api",
+            client_id=f"{username}-{num_teams}",
+            did_win=1,
+        )
+
+    refresh_guild_player_aggregates(guild)
+
+    ten_team = GuildPlayerAggregate.get(
+        GuildPlayerAggregate.normalized_username == "tenteams"
+    )
+    sixty_team = GuildPlayerAggregate.get(
+        GuildPlayerAggregate.normalized_username == "sixtyteams"
+    )
+
+    assert sixty_team.team_score > ten_team.team_score
 
 
 def test_ingest_team_payload_tracks_support_metrics_and_mode_specific_aggregates(

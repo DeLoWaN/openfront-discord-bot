@@ -42,7 +42,6 @@ def test_web_root_resolves_active_guild_by_subdomain(tmp_path):
     assert "/leaderboard" in response.text
     assert '/leaderboard?view=team' in response.text
     assert '/leaderboard?view=ffa' in response.text
-    assert '/leaderboard?view=overall' in response.text
     assert '/leaderboard?view=support' in response.text
     assert "/players" in response.text
 

@@ -46,17 +46,20 @@ hydrated history so operators do not need to crawl OpenFront a second time to
 repair ingestion logic or rebuild derived data. If turn-level detail has been
 cached for a relevant Team game, replay SHALL use the cached turnful payload
 instead of refetching the upstream detail endpoint. When ordinary backfill
-flows encounter unreadable cache for work that still needs hydration, the
-system MAY invalidate that cache and refetch upstream detail as a repair path.
-When explicit replay encounters unreadable cache, it SHALL report a
-cache-integrity failure instead of silently performing a new crawl.
+flows encounter a readable cached payload from prior successful hydration, they
+SHALL treat that payload as authoritative known history and SHALL NOT refetch
+or reparse it. When ordinary backfill flows encounter unreadable cache for work
+that still needs hydration, the system MAY invalidate that cache and refetch
+upstream detail as a repair path. When explicit replay encounters unreadable
+cache, it SHALL report a cache-integrity failure instead of silently performing
+a new crawl.
 
-#### Scenario: Cached game is requested again
+#### Scenario: Ordinary backfill reaches readable known cache
 
-- **WHEN** a backfill or replay operation needs a game whose turn-free payload
-  already exists in the local cache
-- **THEN** the system reuses the cached payload instead of making another
-  upstream detail request
+- **WHEN** a `start` or `resume` backfill operation reaches a game whose cached
+  payload is readable and was produced by prior successful hydration
+- **THEN** the operation skips that game as known history without another
+  upstream detail request or payload re-ingestion
 
 #### Scenario: Replay needs Team support metrics again
 
@@ -68,7 +71,6 @@ cache-integrity failure instead of silently performing a new crawl.
 #### Scenario: Replay needs an FFA game again
 
 - **WHEN** a replay operation rebuilds aggregates for a cached Free For All
-  game
 - **THEN** the system reuses the cached turn-free payload without requiring
   turn-level data
 

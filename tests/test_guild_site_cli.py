@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from peewee import SqliteDatabase
 
 
@@ -193,3 +195,74 @@ def test_guild_site_cli_splits_comma_separated_clan_tags(
     assert "NRTH" in show_output
     assert "NTH" in show_output
     assert "NRTH,NTH" not in show_output
+
+
+def test_guild_site_cli_can_refresh_guild_aggregates(
+    monkeypatch,
+    tmp_path,
+    capsys,
+):
+    from src.data.shared.models import GameParticipant, Guild, GuildPlayerAggregate, ObservedGame
+
+    guild_sites_cli = patch_cli_runtime(monkeypatch, tmp_path)
+
+    assert (
+        guild_sites_cli.main(
+            [
+                "create",
+                "--slug",
+                "north-guild",
+                "--subdomain",
+                "north",
+                "--display-name",
+                "North Guild",
+                "--clan-tag",
+                "NRTH",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    guild = Guild.get(Guild.slug == "north-guild")
+    game = ObservedGame.create(
+        openfront_game_id="game-1",
+        game_type="PUBLIC",
+        mode_name="Team",
+        player_teams="Duos",
+        total_player_count=8,
+        ended_at=datetime(2026, 3, 10, 12, 0, 0),
+    )
+    GameParticipant.create(
+        game=game,
+        guild=guild,
+        raw_username="[NRTH] Temujin",
+        normalized_username="temujin",
+        raw_clan_tag="NRTH",
+        effective_clan_tag="NRTH",
+        clan_tag_source="session",
+        client_id="c1",
+        did_win=1,
+        attack_troops_total=250,
+        attack_action_count=3,
+        donated_troops_total=125,
+        donated_gold_total=50,
+        donation_action_count=2,
+    )
+    GuildPlayerAggregate.create(
+        guild=guild,
+        normalized_username="stale-user",
+        display_username="Stale User",
+        last_observed_clan_tag="NRTH",
+    )
+
+    assert guild_sites_cli.main(["refresh-aggregates", "--slug", "north-guild"]) == 0
+    refresh_output = capsys.readouterr().out
+    assert "north-guild" in refresh_output
+    assert "refreshed_players=1" in refresh_output
+
+    aggregates = list(
+        GuildPlayerAggregate.select().where(GuildPlayerAggregate.guild == guild)
+    )
+    assert len(aggregates) == 1
+    assert aggregates[0].normalized_username == "temujin"

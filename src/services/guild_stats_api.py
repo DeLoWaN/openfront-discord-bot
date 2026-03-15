@@ -3,16 +3,15 @@ from __future__ import annotations
 from typing import Any
 
 from ..data.shared.models import Guild, GuildPlayerAggregate
-from .guild_sites import list_guild_clan_tags
 from .guild_leaderboard import get_guild_player_profile, player_state_label
+from .guild_sites import list_guild_clan_tags
 from .openfront_ingestion import strip_tracked_clan_tag_prefix
 from .player_linking import compute_linked_profile_stats
 
-SUPPORTED_VIEWS = ("team", "ffa", "overall", "support")
+SUPPORTED_VIEWS = ("team", "ffa", "support")
 DEFAULT_SORT_BY_VIEW = {
     "team": "team_score",
     "ffa": "ffa_score",
-    "overall": "overall_score",
     "support": "support_bonus",
 }
 SORT_FIELDS_BY_VIEW = {
@@ -21,13 +20,15 @@ SORT_FIELDS_BY_VIEW = {
         "team_win_count",
         "team_game_count",
         "team_win_rate",
+        "team_recent_game_count_30d",
+        "support_bonus",
         "win_count",
         "game_count",
         "donated_troops_total",
         "donated_gold_total",
         "donation_action_count",
-        "support_bonus",
         "attack_troops_total",
+        "last_team_game_at",
         "last_game_at",
     ),
     "ffa": (
@@ -35,29 +36,22 @@ SORT_FIELDS_BY_VIEW = {
         "ffa_win_count",
         "ffa_game_count",
         "ffa_win_rate",
+        "ffa_recent_game_count_30d",
         "win_count",
         "game_count",
         "attack_troops_total",
-        "last_game_at",
-    ),
-    "overall": (
-        "overall_score",
-        "team_score",
-        "ffa_score",
-        "support_bonus",
-        "team_win_count",
-        "ffa_win_count",
-        "win_count",
-        "game_count",
+        "last_ffa_game_at",
         "last_game_at",
     ),
     "support": (
+        "support_bonus",
         "donated_troops_total",
         "donated_gold_total",
         "donation_action_count",
-        "support_bonus",
         "team_game_count",
+        "team_recent_game_count_30d",
         "team_score",
+        "last_team_game_at",
         "last_game_at",
     ),
 }
@@ -92,9 +86,6 @@ def _row_payload(
     ffa_win_count = aggregate.ffa_win_count
     team_win_rate = team_win_count / team_game_count if team_game_count else 0.0
     ffa_win_rate = ffa_win_count / ffa_game_count if ffa_game_count else 0.0
-    team_score = float(aggregate.team_score or 0.0)
-    ffa_score = float(aggregate.ffa_score or 0.0)
-    overall_score = float(aggregate.overall_score or 0.0)
     display_username = strip_tracked_clan_tag_prefix(
         aggregate.display_username,
         tracked_tags or set(),
@@ -109,18 +100,20 @@ def _row_payload(
         "team_win_count": team_win_count,
         "team_game_count": team_game_count,
         "team_win_rate": round(team_win_rate, 4),
+        "team_score": round(float(aggregate.team_score or 0.0), 2),
+        "team_recent_game_count_30d": int(aggregate.team_recent_game_count_30d or 0),
         "ffa_win_count": ffa_win_count,
         "ffa_game_count": ffa_game_count,
         "ffa_win_rate": round(ffa_win_rate, 4),
-        "team_score": round(team_score, 2),
-        "ffa_score": round(ffa_score, 2),
-        "overall_score": round(overall_score, 2),
+        "ffa_score": round(float(aggregate.ffa_score or 0.0), 2),
+        "ffa_recent_game_count_30d": int(aggregate.ffa_recent_game_count_30d or 0),
         "donated_troops_total": aggregate.donated_troops_total,
         "donated_gold_total": aggregate.donated_gold_total,
         "donation_action_count": aggregate.donation_action_count,
         "attack_troops_total": aggregate.attack_troops_total,
         "attack_action_count": aggregate.attack_action_count,
         "support_bonus": round(float(aggregate.support_bonus or 0.0), 2),
+        "support_recent_game_count_30d": int(aggregate.team_recent_game_count_30d or 0),
         "role_label": aggregate.role_label or "Flexible",
         "last_game_at": aggregate.last_game_at.isoformat()
         if aggregate.last_game_at
@@ -149,7 +142,11 @@ def build_leaderboard_response(
     allowed_sorts = SORT_FIELDS_BY_VIEW[normalized_view]
     sort_field = sort_by if sort_by in allowed_sorts else DEFAULT_SORT_BY_VIEW[normalized_view]
     rows.sort(
-        key=lambda row: (row.get(sort_field) is None, row.get(sort_field), row["display_username"]),
+        key=lambda row: (
+            row.get(sort_field) is None,
+            row.get(sort_field),
+            row["display_username"],
+        ),
         reverse=True,
     )
     return {
@@ -165,22 +162,21 @@ def build_scoring_response(view: str) -> dict[str, Any]:
     normalized_view = _normalized_view(view)
     summaries = {
         "team": (
-            "Team score is normalized across the guild. Harder team lobbies and "
-            "recent wins matter most, stacked guild games count less, losses "
-            "subtract, and support bonus adds a visible secondary lift."
+            "Team score is cumulative. Every Team game adds positive value, wins "
+            "add more, larger Team lobbies count more, win rate only nudges the "
+            "total, support bonus adds a visible lift, and recent activity is "
+            "shown beside the score instead of changing it."
         ),
         "ffa": (
-            "FFA score is normalized across the guild. Larger solo lobbies and "
-            "recent wins matter more, while losses subtract mildly."
-        ),
-        "overall": (
-            "Overall score blends normalized Team and FFA performance with a "
-            "Team-first target and confidence damping, so tiny samples do not "
-            "dominate the board."
+            "FFA score is separate from Team and stays cumulative. Every guild-"
+            "relevant FFA game adds positive value, wins add more, larger "
+            "lobbies count more, and recent activity is shown beside the score "
+            "instead of decaying it."
         ),
         "support": (
-            "Support view ranks the visible support bonus first and still shows "
-            "exact troop, gold, and donation action totals from team games."
+            "Support ranks the visible support bonus first and still shows the "
+            "exact troop, gold, and donation totals behind it. The bonus only "
+            "adds to Team score; it never subtracts from frontliners."
         ),
     }
     details = {
@@ -188,20 +184,29 @@ def build_scoring_response(view: str) -> dict[str, Any]:
             "title": "Exact computation",
             "sections": [
                 {
-                    "title": "Team result raw",
+                    "title": "Team core score",
                     "lines": [
-                        "recency_weight = 0.4 + 0.6 * 0.5^(days_since_game / 45)",
-                        "team_difficulty = sqrt(max(1, inferred_num_teams - 1))",
-                        "win delta = team_difficulty * recency_weight / sqrt(guild_stack)",
-                        "loss delta = -0.4 * team_difficulty * recency_weight * sqrt(guild_stack)",
+                        "difficulty_weight = 1 + 0.25 * log2(max(2, inferred_num_teams))",
+                        "presence_points_per_game = 10 * difficulty_weight",
+                        "win_bonus_points_per_win = 6 * difficulty_weight",
+                        "core_team_score = (sum(presence) + sum(win_bonus)) * (0.85 + 0.30 * team_win_rate)",
                     ],
                 },
                 {
                     "title": "Support bonus",
                     "lines": [
-                        "support volume uses log-scaled troops, gold, and donation actions",
-                        "support bonus is normalized across players with positive support raw",
-                        "team_score = 0.75 * team_result_index + 0.25 * support_bonus",
+                        "support_raw = log1p(troops / 100000) + 0.7 * log1p(gold / 100000) + 0.5 * log1p(donation_actions)",
+                        "support_scaled = 25 * support_raw * (0.6 + 0.4 * support_share)",
+                        "support_bonus = min(core_team_score * 0.20, support_scaled)",
+                        "team_score = core_team_score + support_bonus",
+                    ],
+                },
+                {
+                    "title": "Recent activity metadata",
+                    "lines": [
+                        "team_recent_game_count_30d counts Team games in the last 30 days",
+                        "last_team_game_at shows the latest observed Team game timestamp",
+                        "recent activity is displayed beside the score and does not decay the score",
                     ],
                 },
             ],
@@ -210,26 +215,13 @@ def build_scoring_response(view: str) -> dict[str, Any]:
             "title": "Exact computation",
             "sections": [
                 {
-                    "title": "FFA raw",
+                    "title": "FFA score",
                     "lines": [
-                        "ffa_difficulty = sqrt(max(1, total_player_count - 1))",
-                        "win delta = ffa_difficulty * recency_weight",
-                        "loss delta = -0.25 * ffa_difficulty * recency_weight",
-                        "ffa_score is the normalized FFA raw rank",
-                    ],
-                }
-            ],
-        },
-        "overall": {
-            "title": "Exact computation",
-            "sections": [
-                {
-                    "title": "Overall blend",
-                    "lines": [
-                        "Team and FFA are normalized separately before blending",
-                        "base weights target 70% Team and 30% FFA",
-                        "each mode is damped by confidence = min(1, games / 25)",
-                        "overall_score = blended_mode_score * overall_confidence",
+                        "difficulty_weight = 1 + 0.20 * log2(max(2, total_player_count))",
+                        "presence_points_per_game = 10 * difficulty_weight",
+                        "win_bonus_points_per_win = 6 * difficulty_weight",
+                        "ffa_score = (sum(presence) + sum(win_bonus)) * (0.85 + 0.30 * ffa_win_rate)",
+                        "recent activity is exposed beside the score through last_ffa_game_at and ffa_recent_game_count_30d",
                     ],
                 }
             ],
@@ -240,8 +232,9 @@ def build_scoring_response(view: str) -> dict[str, Any]:
                 {
                     "title": "Support ranking",
                     "lines": [
-                        "support_bonus is the normalized support component used by Team score",
-                        "support rank uses support bonus first and exact donation totals as extra context",
+                        "support_bonus uses the same additive bonus value shown on Team rows",
+                        "support rank sorts by support_bonus first, then donation totals for additional context",
+                        "support recent activity uses the Team recent-game window because support only comes from Team games",
                     ],
                 }
             ],
@@ -253,20 +246,21 @@ def build_scoring_response(view: str) -> dict[str, Any]:
         "details": details[normalized_view],
         "factors": {
             "team": [
-                "Wins matter most.",
-                "Harder lobbies count more.",
-                "Stacked guild games count less.",
-                "Support bonus stays visible.",
+                "Every Team game adds positive score.",
+                "Wins add extra score on top of participation.",
+                "Bigger Team lobbies are worth more.",
+                "Support bonus stays visible and additive.",
             ],
             "ffa": [
-                "FFA ignores support metrics.",
-                "Bigger solo lobbies count more.",
-                "Losses subtract mildly.",
+                "FFA is scored separately from Team.",
+                "Every guild-relevant FFA game adds positive score.",
+                "Bigger FFA lobbies are worth more.",
+                "Recent activity is context, not score decay.",
             ],
-            "overall": [
-                "Team and FFA are normalized separately.",
-                "Small samples count less through confidence damping.",
-                "The target mix is 70% Team and 30% FFA.",
+            "support": [
+                "Support only comes from Team donation metrics.",
+                "Support bonus is visible on Team and Support views.",
+                "The bonus never subtracts points from frontliners.",
             ],
         },
     }
@@ -291,20 +285,25 @@ async def build_player_profile_response(
                 "wins": player["team_win_count"],
                 "games": player["team_game_count"],
                 "win_rate": player["team_win_rate"],
+                "recent_games_30d": player["team_recent_game_count_30d"],
+                "last_game_at": player["last_team_game_at"],
             },
             "ffa": {
                 "score": player["ffa_score"],
                 "wins": player["ffa_win_count"],
                 "games": player["ffa_game_count"],
                 "win_rate": player["ffa_win_rate"],
+                "recent_games_30d": player["ffa_recent_game_count_30d"],
+                "last_game_at": player["last_ffa_game_at"],
             },
-            "overall": {"score": player["overall_score"]},
             "support": {
                 "troops_donated": player["donated_troops_total"],
                 "gold_donated": player["donated_gold_total"],
                 "donation_actions": player["donation_action_count"],
                 "support_bonus": player["support_bonus"],
                 "role_label": player["role_label"],
+                "recent_games_30d": player["support_recent_game_count_30d"],
+                "last_game_at": player["last_team_game_at"],
             },
         },
     }
