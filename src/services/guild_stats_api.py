@@ -3,6 +3,13 @@ from __future__ import annotations
 from typing import Any
 
 from ..data.shared.models import Guild, GuildPlayerAggregate
+from .guild_badges import list_player_badges
+from .guild_combo_service import list_player_best_partners, list_player_combo_summaries
+from .guild_engagement_api import (
+    build_home_response,
+    build_player_timeseries_response,
+    build_recent_results_response,
+)
 from .guild_leaderboard import get_guild_player_profile, player_state_label
 from .guild_sites import list_guild_clan_tags
 from .openfront_ingestion import strip_tracked_clan_tag_prefix
@@ -163,9 +170,10 @@ def build_scoring_response(view: str) -> dict[str, Any]:
     summaries = {
         "team": (
             "Team score is cumulative. Every Team game adds positive value, wins "
-            "add more, larger Team lobbies count more, win rate only nudges the "
-            "total, support bonus adds a visible lift, and recent activity is "
-            "shown beside the score instead of changing it."
+            "add more, larger Team lobbies count more, smaller teams count more, "
+            "lower tracked guild presence on your team counts more, win rate only "
+            "nudges the total, support bonus adds a visible lift, and recent "
+            "activity is shown beside the score instead of changing it."
         ),
         "ffa": (
             "FFA score is separate from Team and stays cumulative. Every guild-"
@@ -186,7 +194,10 @@ def build_scoring_response(view: str) -> dict[str, Any]:
                 {
                     "title": "Team core score",
                     "lines": [
-                        "difficulty_weight = 1 + 0.25 * log2(max(2, inferred_num_teams))",
+                        "team_count_factor = 1 + 0.25 * log2(max(2, inferred_num_teams))",
+                        "small_team_factor = 1 + 0.15 * log2(max(1, 6 / players_per_team))",
+                        "guild_presence_factor = 1 + 0.25 * (1 - min(players_per_team, tracked_guild_teammates) / players_per_team)",
+                        "difficulty_weight = team_count_factor * small_team_factor * guild_presence_factor",
                         "presence_points_per_game = 10 * difficulty_weight",
                         "win_bonus_points_per_win = 6 * difficulty_weight",
                         "core_team_score = (sum(presence) + sum(win_bonus)) * (0.85 + 0.30 * team_win_rate)",
@@ -249,6 +260,8 @@ def build_scoring_response(view: str) -> dict[str, Any]:
                 "Every Team game adds positive score.",
                 "Wins add extra score on top of participation.",
                 "Bigger Team lobbies are worth more.",
+                "Smaller players-per-team formats are worth more.",
+                "Fewer tracked guild teammates on the same team are worth more.",
                 "Support bonus stays visible and additive.",
             ],
             "ffa": [
@@ -277,8 +290,14 @@ async def build_player_profile_response(
         return None
 
     player = _row_payload(aggregate, set(list_guild_clan_tags(guild)))
+    badges = list_player_badges(guild, normalized_username)
+    best_partners = list_player_best_partners(guild, normalized_username)
+    combo_summaries = list_player_combo_summaries(guild, normalized_username)
     response = {
         "player": player,
+        "badges": badges,
+        "best_partners": best_partners,
+        "combo_summaries": combo_summaries,
         "sections": {
             "team": {
                 "score": player["team_score"],

@@ -218,3 +218,5 @@ __marimo__/
 config.yml
 central.db
 guild_data/
+node_modules/
+src/apps/web/frontend_dist/

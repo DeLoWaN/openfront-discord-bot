@@ -93,25 +93,16 @@ def test_leaderboard_uses_stored_aggregates_and_marks_state(tmp_path):
     response = client.get("/leaderboard", headers={"host": "north.example.test"})
 
     assert response.status_code == 200
-    assert response.text.index("Ace") < response.text.index("Bolt")
-    assert "Observed" in response.text
-    assert "Linked" in response.text
-    assert '<th>State</th>' not in response.text
-    assert '<th>Primary Metric</th>' not in response.text
-    assert (
-        '<td><a href="/players/ace">Ace</a> <strong>Observed</strong></td>'
-        in response.text
-    )
-    assert (
-        '<td><a href="/players/bolt">Bolt</a> <strong>Linked</strong></td>'
-        in response.text
-    )
-    assert "/players/ace" in response.text
-    assert "[NU] Ace" not in response.text
-    assert "[NU] Bolt" not in response.text
+    assert "North Guild" in response.text
+    assert 'id="app-root"' in response.text
+    assert "/leaderboard" in response.text
+    assert "/players" in response.text
+    assert "/combos" in response.text
+    assert "/wins" in response.text
+    assert '"currentPath": "/leaderboard"' in response.text
 
 
-def test_leaderboard_uses_view_specific_default_columns(tmp_path):
+def test_leaderboard_shell_supports_all_public_views_except_overall(tmp_path):
     from fastapi.testclient import TestClient
 
     client = TestClient(make_client(tmp_path))
@@ -134,42 +125,18 @@ def test_leaderboard_uses_view_specific_default_columns(tmp_path):
     )
 
     assert team.status_code == 200
-    assert "<th>Team Score</th>" in team.text
-    assert "<th>Wins</th>" in team.text
-    assert "<th>Win Rate</th>" in team.text
-    assert "<th>Games</th>" in team.text
-    assert "<th>Games 30d</th>" in team.text
-    assert "<th>Support Bonus</th>" in team.text
-    assert "<th>Role</th>" in team.text
-    assert "<th>Primary Metric</th>" not in team.text
-    assert "260.0" in team.text
-    assert "Frontliner" in team.text
+    assert '"currentPath": "/leaderboard"' in team.text
 
     assert ffa.status_code == 200
-    assert "<th>FFA Score</th>" in ffa.text
-    assert "<th>Wins</th>" in ffa.text
-    assert "<th>Win Rate</th>" in ffa.text
-    assert "<th>Games</th>" in ffa.text
-    assert "<th>Games 30d</th>" in ffa.text
-    assert "<th>Troops Donated</th>" not in ffa.text
-    assert "<th>Support Bonus</th>" not in ffa.text
-    assert "80.0" in ffa.text
+    assert '"currentPath": "/leaderboard"' in ffa.text
 
     assert overall.status_code == 404
 
     assert support.status_code == 200
-    assert "<th>Troops Donated</th>" in support.text
-    assert "<th>Gold Donated</th>" in support.text
-    assert "<th>Donation Actions</th>" in support.text
-    assert "<th>Support Bonus</th>" in support.text
-    assert "<th>Games 30d</th>" in support.text
-    assert "<th>Role</th>" in support.text
-    assert "<th>Primary Metric</th>" not in support.text
-    assert "50" in support.text
-    assert "Hybrid" in support.text
+    assert '"currentPath": "/leaderboard"' in support.text
 
 
-def test_leaderboard_shows_overall_weighting_copy_only_on_overall_view(tmp_path):
+def test_leaderboard_shell_keeps_guild_scope_for_all_supported_views(tmp_path):
     from fastapi.testclient import TestClient
 
     client = TestClient(make_client(tmp_path))
@@ -186,12 +153,12 @@ def test_leaderboard_shows_overall_weighting_copy_only_on_overall_view(tmp_path)
         headers={"host": "north.example.test"},
     )
 
-    assert "Exact computation" in team.text
-    assert "Exact computation" in ffa.text
-    assert "Exact computation" in support.text
-    assert "support bonus" in team.text.lower()
-    assert "recent activity" in team.text.lower()
-    assert "donation" in support.text.lower()
+    assert "North Guild" in team.text
+    assert "North Guild" in ffa.text
+    assert "North Guild" in support.text
+    assert "/players" in team.text
+    assert "/combos" in ffa.text
+    assert "/wins" in support.text
 
 
 def test_player_profile_page_is_public_for_observed_and_linked_entries(tmp_path):
@@ -203,18 +170,7 @@ def test_player_profile_page_is_public_for_observed_and_linked_entries(tmp_path)
     linked = client.get("/players/bolt", headers={"host": "north.example.test"})
 
     assert observed.status_code == 200
-    assert "Ace" in observed.text
-    assert "[NU] Ace" not in observed.text
-    assert "Observed player" in observed.text
-    assert "<h2>Team</h2>" in observed.text
-    assert "<h2>FFA</h2>" in observed.text
-    assert "<h2>Support</h2>" in observed.text
-    assert "Games in the last 30 days" in observed.text
+    assert 'id="app-root"' in observed.text
+    assert '"currentPath": "/players/ace"' in observed.text
     assert linked.status_code == 200
-    assert "Bolt" in linked.text
-    assert "[NU] Bolt" not in linked.text
-    assert "Linked player" in linked.text
-    assert "<h2>Team</h2>" in linked.text
-    assert "<h2>FFA</h2>" in linked.text
-    assert "<h2>Support</h2>" in linked.text
-    assert "Games in the last 30 days" in linked.text
+    assert '"currentPath": "/players/bolt"' in linked.text

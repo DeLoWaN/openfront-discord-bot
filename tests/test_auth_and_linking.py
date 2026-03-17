@@ -160,11 +160,16 @@ def test_linking_player_id_marks_exact_alias_as_linked_and_shows_global_stats(tm
     )
     exact = client.get("/players/ace", headers={"host": "north.example.test"})
     similar = client.get("/players/acel", headers={"host": "north.example.test"})
+    exact_api = client.get("/api/players/ace", headers={"host": "north.example.test"})
+    similar_api = client.get("/api/players/acel", headers={"host": "north.example.test"})
 
     assert link.status_code in {302, 303, 307}
     assert exact.status_code == 200
-    assert "Linked player" in exact.text
-    assert "Global OpenFront wins" in exact.text
-    assert "9" in exact.text
+    assert '"currentPath": "/players/ace"' in exact.text
+    assert exact_api.status_code == 200
+    assert exact_api.json()["player"]["state"] == "Linked"
+    assert exact_api.json()["linked"]["global_public_wins"] == 9
     assert similar.status_code == 200
-    assert "Observed player" in similar.text
+    assert '"currentPath": "/players/acel"' in similar.text
+    assert similar_api.status_code == 200
+    assert similar_api.json()["player"]["state"] == "Observed"

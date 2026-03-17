@@ -2,23 +2,32 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from html import escape
+import json
 from numbers import Real
+from pathlib import Path
 import secrets
-from typing import Callable
+from typing import Any, Callable, cast
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
 from ...core.config import BotConfig
 from ...data.shared.models import PlayerLink
 from ...services.discord_oauth import DiscordOAuthClient, build_discord_authorize_url
+from ...services.guild_engagement_api import (
+    build_home_response,
+    build_player_timeseries_response,
+    build_recent_results_response,
+)
 from ...services.guild_stats_api import (
     SUPPORTED_VIEWS,
     build_leaderboard_response,
     build_player_profile_response,
     build_scoring_response,
 )
+from ...services.guild_combo_service import get_combo_detail, list_combo_rankings
 from ...services.guild_sites import list_guild_clan_tags, resolve_guild_site_for_host
 from ...services.player_linking import link_site_user_to_player
 from ...services.site_auth import get_site_user, upsert_site_user_from_discord
@@ -26,6 +35,12 @@ from ...services.site_auth import get_site_user, upsert_site_user_from_discord
 
 LeaderboardRow = Mapping[str, object]
 LeaderboardColumn = tuple[str, Callable[[LeaderboardRow], str]]
+FRONTEND_DIST_DIR = Path(__file__).resolve().parent / "frontend_dist"
+FAVICON_DATA_URI = (
+    "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E"
+    "%3Crect width='64' height='64' rx='16' fill='%2318230f'/%3E"
+    "%3Cpath d='M20 18h24v8H28v10h14v8H28v10h-8z' fill='%23f7f1e3'/%3E%3C/svg%3E"
+)
 
 
 def _format_table_value(value: object) -> str:
@@ -184,14 +199,66 @@ def _render_guild_page(title: str, body: str) -> str:
 </html>"""
 
 
+def _render_spa_shell(
+    *,
+    guild_display_name: str,
+    clan_tags: list[str],
+    current_path: str,
+) -> str:
+    assets_dir = FRONTEND_DIST_DIR / "assets"
+    css_file = next(iter(sorted(assets_dir.glob("*.css"))), None) if assets_dir.exists() else None
+    js_file = next(iter(sorted(assets_dir.glob("app*.js"))), None) if assets_dir.exists() else None
+    css_href = f"/assets/{css_file.name}" if css_file else None
+    js_href = f"/assets/{js_file.name}" if js_file else None
+    context_json = json.dumps(
+        {
+            "displayName": guild_display_name,
+            "clanTags": clan_tags,
+            "currentPath": current_path,
+        }
+    )
+    css_tag = f'<link rel="stylesheet" href="{css_href}" />' if css_href else ""
+    js_tag = f'<script type="module" src="{js_href}"></script>' if js_href else ""
+    tags_markup = "".join(f"<li>{escape(tag)}</li>" for tag in clan_tags)
+    return f"""<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{escape(guild_display_name)} Guild Stats</title>
+    <link rel="icon" href="{FAVICON_DATA_URI}" />
+    {css_tag}
+  </head>
+  <body>
+    <div id="app-root">
+      <main style="max-width: 980px; margin: 0 auto; padding: 2rem 1rem; font-family: Georgia, serif;">
+        <p>OpenFront Guild Pulse</p>
+        <h1>{escape(guild_display_name)}</h1>
+        <nav style="display: flex; gap: 0.75rem; flex-wrap: wrap; margin: 1.5rem 0;">
+          <a href="/">Home</a>
+          <a href="/leaderboard">Leaderboard</a>
+          <a href="/players">Players</a>
+          <a href="/combos">Combos</a>
+          <a href="/wins">Recent wins</a>
+        </nav>
+        <p>Tracked clan tags</p>
+        <ul>{tags_markup}</ul>
+      </main>
+    </div>
+    <script>window.__GUILD_CONTEXT__ = {context_json};</script>
+    {js_tag}
+  </body>
+</html>"""
+
+
 def create_app(
     config: BotConfig | None = None,
     *,
-    discord_oauth_client=None,
-    openfront_client=None,
+    discord_oauth_client: DiscordOAuthClient | None = None,
+    openfront_client: Any | None = None,
 ) -> FastAPI:
     app = FastAPI(title="openfront-guild-stats")
-    app.name = "openfront-guild-stats"
+    cast(Any, app).name = "openfront-guild-stats"
     oauth_config = config.discord_oauth if config else None
     app.add_middleware(
         SessionMiddleware,
@@ -203,8 +270,11 @@ def create_app(
         discord_oauth_client
         or (DiscordOAuthClient(oauth_config) if oauth_config else None)
     )
+    assets_dir = FRONTEND_DIST_DIR / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="spa-assets")
 
-    def resolve_request_guild(request: Request):
+    def resolve_request_guild(request: Request) -> Any:
         guild = resolve_guild_site_for_host(request.headers.get("host"))
         if guild is None:
             raise HTTPException(status_code=404, detail="Guild site not found")
@@ -220,40 +290,19 @@ def create_app(
             raise HTTPException(status_code=404, detail=f"Unsupported leaderboard view: {view}")
         return normalized
 
+    def render_public_shell(request: Request, guild: Any) -> HTMLResponse:
+        return HTMLResponse(
+            _render_spa_shell(
+                guild_display_name=guild.display_name,
+                clan_tags=list_guild_clan_tags(guild),
+                current_path=request.url.path,
+            )
+        )
+
     @app.get("/", response_class=HTMLResponse)
     async def guild_home(request: Request) -> HTMLResponse:
         guild = resolve_request_guild(request)
-        clan_tags = list_guild_clan_tags(guild)
-        leaderboard_links = "".join(
-            (
-                f'<a class="nav-link" href="/leaderboard?view={escape(view)}">'
-                f'{escape(view.title())} Leaderboard</a>'
-            )
-            for view in SUPPORTED_VIEWS
-        )
-        tags_markup = "".join(
-            f'<li class="tag">{escape(tag)}</li>' for tag in clan_tags
-        ) or '<li class="tag">No clan tags configured</li>'
-        body = f"""
-        <header>
-          <p>OpenFront Guild Site</p>
-          <h1>{escape(guild.display_name)}</h1>
-          <p>Tracked clan tags for this guild are listed below. Public stats on this site are scoped to this guild only.</p>
-        </header>
-        <nav>
-          <a class="nav-link" href="/leaderboard">Leaderboard</a>
-          <a class="nav-link" href="/players">Players</a>
-        </nav>
-        <section>
-          <h2>Competitive Views</h2>
-          <nav>{leaderboard_links}</nav>
-        </section>
-        <section>
-          <h2>Tracked Clan Tags</h2>
-          <ul class="tags">{tags_markup}</ul>
-        </section>
-        """
-        return HTMLResponse(_render_guild_page(guild.display_name, body))
+        return render_public_shell(request, guild)
 
     @app.get("/auth/discord/login")
     async def discord_login(request: Request):
@@ -353,6 +402,49 @@ def create_app(
             raise HTTPException(status_code=404, detail="Guild player not found")
         return JSONResponse(payload)
 
+    @app.get("/api/players/{normalized_username}/timeseries")
+    async def guild_player_timeseries_api(request: Request, normalized_username: str):
+        guild = resolve_request_guild(request)
+        profile = await build_player_profile_response(
+            guild,
+            normalized_username,
+            openfront_client=app.state.openfront_client,
+        )
+        if profile is None:
+            raise HTTPException(status_code=404, detail="Guild player not found")
+        return JSONResponse(build_player_timeseries_response(guild, normalized_username))
+
+    @app.get("/api/home")
+    async def guild_home_api(request: Request):
+        guild = resolve_request_guild(request)
+        return JSONResponse(build_home_response(guild))
+
+    @app.get("/api/combos/{format_slug}")
+    async def guild_combo_rankings_api(request: Request, format_slug: str):
+        guild = resolve_request_guild(request)
+        try:
+            payload = list_combo_rankings(guild, format_slug)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse(payload)
+
+    @app.get("/api/combos/{format_slug}/{roster_key:path}")
+    async def guild_combo_detail_api(
+        request: Request,
+        format_slug: str,
+        roster_key: str,
+    ):
+        guild = resolve_request_guild(request)
+        payload = get_combo_detail(guild, format_slug, roster_key)
+        if payload is None:
+            raise HTTPException(status_code=404, detail="Guild combo not found")
+        return JSONResponse(payload)
+
+    @app.get("/api/results/recent")
+    async def guild_recent_results_api(request: Request, limit: int = 20):
+        guild = resolve_request_guild(request)
+        return JSONResponse(build_recent_results_response(guild, limit=limit))
+
     @app.get("/leaderboard", response_class=HTMLResponse)
     async def guild_leaderboard_placeholder(
         request: Request,
@@ -360,70 +452,36 @@ def create_app(
         sort: str | None = None,
     ) -> HTMLResponse:
         guild = resolve_request_guild(request)
-        resolved_view = resolve_leaderboard_view(view)
-        leaderboard = build_leaderboard_response(guild, resolved_view, sort_by=sort)
-        scoring = build_scoring_response(resolved_view)
-        nav_links = "".join(
-            f'<a class="nav-link" href="/leaderboard?view={escape(item)}">{escape(item.title())}</a>'
-            for item in SUPPORTED_VIEWS
-        )
-        columns = _leaderboard_columns(resolved_view)
-        header_labels = ("Player", *(label for label, _ in columns))
-        header_cells = "".join(f"<th>{escape(label)}</th>" for label in header_labels)
-        rows = "".join(
-            "<tr>"
-            f'<td><a href="/players/{escape(entry["normalized_username"])}">{escape(entry["display_username"])}</a> <strong>{escape(entry["state"])}</strong></td>'
-            + "".join(f"<td>{render_value(entry)}</td>" for _, render_value in columns)
-            + "</tr>"
-            for entry in leaderboard["rows"]
-        ) or (
-            "<tr>"
-            f'<td colspan="{len(columns) + 1}">No guild players have been aggregated yet.</td>'
-            "</tr>"
-        )
-        scoring_details = _render_scoring_details(scoring)
-        body = f"""
-        <header>
-          <p>{escape(guild.display_name)}</p>
-          <h1>Leaderboard</h1>
-          <p><strong>How scoring works:</strong> {escape(scoring["summary"])}</p>
-        </header>
-        <nav>
-          <a class="nav-link" href="/">Back to guild home</a>
-          <a class="nav-link" href="/players">Browse players</a>
-          {nav_links}
-        </nav>
-        {scoring_details}
-        <table>
-          <thead>
-            <tr>{header_cells}</tr>
-          </thead>
-          <tbody>{rows}</tbody>
-        </table>
-        """
-        return HTMLResponse(_render_guild_page(f"{guild.display_name} leaderboard", body))
+        _ = resolve_leaderboard_view(view)
+        _ = sort
+        return render_public_shell(request, guild)
 
     @app.get("/players", response_class=HTMLResponse)
     async def guild_players_placeholder(request: Request) -> HTMLResponse:
         guild = resolve_request_guild(request)
-        leaderboard = build_leaderboard_response(guild, "team")
-        player_links = "".join(
-            f'<li><a class="nav-link" href="/players/{escape(entry["normalized_username"])}">{escape(entry["display_username"])}</a> <strong>{escape(entry["state"])}</strong></li>'
-            for entry in leaderboard["rows"]
-        ) or "<li>No public guild player profiles are available yet.</li>"
-        body = f"""
-        <header>
-          <p>{escape(guild.display_name)}</p>
-          <h1>Players</h1>
-          <p>Public player profiles reflect stored guild-scoped aggregates.</p>
-        </header>
-        <nav>
-          <a class="nav-link" href="/">Back to guild home</a>
-          <a class="nav-link" href="/leaderboard">Leaderboard</a>
-        </nav>
-        <ul>{player_links}</ul>
-        """
-        return HTMLResponse(_render_guild_page(f"{guild.display_name} players", body))
+        return render_public_shell(request, guild)
+
+    @app.get("/combos", response_class=HTMLResponse)
+    async def guild_combos_page(request: Request) -> HTMLResponse:
+        guild = resolve_request_guild(request)
+        return render_public_shell(request, guild)
+
+    @app.get("/combos/{format_slug}", response_class=HTMLResponse)
+    @app.get("/combos/{format_slug}/{roster_key:path}", response_class=HTMLResponse)
+    async def guild_combo_detail_page(
+        request: Request,
+        format_slug: str | None = None,
+        roster_key: str | None = None,
+    ) -> HTMLResponse:
+        guild = resolve_request_guild(request)
+        _ = format_slug
+        _ = roster_key
+        return render_public_shell(request, guild)
+
+    @app.get("/wins", response_class=HTMLResponse)
+    async def guild_wins_page(request: Request) -> HTMLResponse:
+        guild = resolve_request_guild(request)
+        return render_public_shell(request, guild)
 
     @app.get("/players/{normalized_username}", response_class=HTMLResponse)
     async def guild_player_profile(
@@ -438,75 +496,6 @@ def create_app(
         )
         if profile is None:
             raise HTTPException(status_code=404, detail="Guild player not found")
-        player = profile["player"]
-        sections = profile["sections"]
-        state_label = str(player["state"])
-        descriptor = "Linked player" if state_label == "Linked" else "Observed player"
-        linked_sections = ""
-        linked_stats = profile.get("linked")
-        if linked_stats is not None:
-            linked_sections = f"""
-            <section>
-              <h2>Linked guild stats</h2>
-              <p><strong>Linked guild wins:</strong> {linked_stats["guild_win_count"]}</p>
-              <p><strong>Linked guild games:</strong> {linked_stats["guild_game_count"]}</p>
-            </section>
-            <section>
-              <h2>Global OpenFront wins</h2>
-              <p><strong>Global OpenFront wins:</strong> {linked_stats["global_public_wins"]}</p>
-            </section>
-            """
-        body = f"""
-        <header>
-          <p>{escape(guild.display_name)}</p>
-          <h1>{escape(player["display_username"])}</h1>
-          <p>{descriptor} profile</p>
-        </header>
-        <nav>
-          <a class="nav-link" href="/leaderboard">Leaderboard</a>
-          <a class="nav-link" href="/players">All players</a>
-        </nav>
-        <section>
-          <p><strong>State:</strong> {state_label}</p>
-          <p><strong>Tracked alias key:</strong> {escape(player["normalized_username"])}</p>
-        </section>
-        <section>
-          <h2>Team</h2>
-          <p><strong>Score:</strong> {sections["team"]["score"]}</p>
-          <p><strong>Wins:</strong> {sections["team"]["wins"]}</p>
-          <p><strong>Games:</strong> {sections["team"]["games"]}</p>
-          <p><strong>Win rate:</strong> {sections["team"]["win_rate"]}</p>
-          <p><strong>Games in the last 30 days:</strong> {sections["team"]["recent_games_30d"]}</p>
-          <p><strong>Last Team game:</strong> {escape(str(sections["team"]["last_game_at"] or "-"))}</p>
-        </section>
-        <section>
-          <h2>FFA</h2>
-          <p><strong>Score:</strong> {sections["ffa"]["score"]}</p>
-          <p><strong>Wins:</strong> {sections["ffa"]["wins"]}</p>
-          <p><strong>Games:</strong> {sections["ffa"]["games"]}</p>
-          <p><strong>Win rate:</strong> {sections["ffa"]["win_rate"]}</p>
-          <p><strong>Games in the last 30 days:</strong> {sections["ffa"]["recent_games_30d"]}</p>
-          <p><strong>Last FFA game:</strong> {escape(str(sections["ffa"]["last_game_at"] or "-"))}</p>
-        </section>
-        <section>
-          <h2>Support</h2>
-          <p><strong>Troops donated:</strong> {sections["support"]["troops_donated"]}</p>
-          <p><strong>Gold donated:</strong> {sections["support"]["gold_donated"]}</p>
-          <p><strong>Donation actions:</strong> {sections["support"]["donation_actions"]}</p>
-          <p><strong>Support bonus:</strong> {sections["support"]["support_bonus"]}</p>
-          <p><strong>Games in the last 30 days:</strong> {sections["support"]["recent_games_30d"]}</p>
-          <p><strong>Role:</strong> {escape(sections["support"]["role_label"])}</p>
-        </section>
-        <section>
-          <p><strong>Last observed clan tag:</strong> {escape(str(player["last_observed_clan_tag"] or "-"))}</p>
-        </section>
-        {linked_sections}
-        """
-        return HTMLResponse(
-            _render_guild_page(
-                f'{guild.display_name} player {player["display_username"]}',
-                body,
-            )
-        )
+        return render_public_shell(request, guild)
 
     return app

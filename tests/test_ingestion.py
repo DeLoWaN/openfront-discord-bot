@@ -46,20 +46,56 @@ def test_infer_team_count_uses_explicit_numeric_and_named_team_sizes():
 def test_team_difficulty_weight_grows_monotonically_past_ten_teams():
     from src.services.openfront_ingestion import _team_difficulty_weight
 
-    four_team = _team_difficulty_weight(4)
-    ten_team = _team_difficulty_weight(10)
-    sixty_team = _team_difficulty_weight(60)
+    four_team = _team_difficulty_weight(4, players_per_team=4, tracked_guild_teammates=4)
+    ten_team = _team_difficulty_weight(
+        10, players_per_team=4, tracked_guild_teammates=4
+    )
+    sixty_team = _team_difficulty_weight(
+        60, players_per_team=4, tracked_guild_teammates=4
+    )
 
     assert four_team > 1.0
     assert ten_team > four_team
     assert sixty_team > ten_team
 
 
+def test_team_difficulty_weight_increases_for_smaller_teams():
+    from src.services.openfront_ingestion import _team_difficulty_weight
+
+    quads = _team_difficulty_weight(8, players_per_team=4, tracked_guild_teammates=4)
+    duos = _team_difficulty_weight(8, players_per_team=2, tracked_guild_teammates=2)
+
+    assert duos > quads
+
+
+def test_team_difficulty_weight_increases_for_lower_tracked_guild_presence():
+    from src.services.openfront_ingestion import _team_difficulty_weight
+
+    full_guild_team = _team_difficulty_weight(
+        8, players_per_team=4, tracked_guild_teammates=4
+    )
+    partial_guild_team = _team_difficulty_weight(
+        8, players_per_team=4, tracked_guild_teammates=2
+    )
+
+    assert partial_guild_team > full_guild_team
+
+
 def test_team_game_points_reward_wins_without_subtracting_losses():
     from src.services.openfront_ingestion import _team_game_points
 
-    loss_points = _team_game_points(inferred_num_teams=12, did_win=False)
-    win_points = _team_game_points(inferred_num_teams=12, did_win=True)
+    loss_points = _team_game_points(
+        inferred_num_teams=12,
+        players_per_team=2,
+        tracked_guild_teammates=1,
+        did_win=False,
+    )
+    win_points = _team_game_points(
+        inferred_num_teams=12,
+        players_per_team=2,
+        tracked_guild_teammates=1,
+        did_win=True,
+    )
 
     assert loss_points > 0.0
     assert win_points > loss_points

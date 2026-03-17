@@ -265,6 +265,56 @@ class GuildPlayerAggregate(SharedBaseModel):
         indexes = ((("guild", "normalized_username"), True),)
 
 
+class GuildComboAggregate(SharedBaseModel):
+    id = AutoField()
+    guild = ForeignKeyField(Guild, backref="combo_aggregates", on_delete="CASCADE")
+    format_slug = CharField()
+    roster_key = CharField()
+    games_together = IntegerField(default=0)
+    wins_together = IntegerField(default=0)
+    win_rate = FloatField(default=0)
+    is_confirmed = IntegerField(default=0)
+    first_game_at = DateTimeField(null=True)
+    last_game_at = DateTimeField(null=True)
+    last_win_at = DateTimeField(null=True)
+
+    class Meta:
+        table_name = "guild_combo_aggregates"
+        indexes = ((("guild", "format_slug", "roster_key"), True),)
+
+
+class GuildComboMember(SharedBaseModel):
+    id = AutoField()
+    combo = ForeignKeyField(
+        GuildComboAggregate,
+        backref="members",
+        on_delete="CASCADE",
+    )
+    player = ForeignKeyField(Player, backref="combo_memberships", null=True)
+    normalized_username = CharField()
+    display_username = CharField()
+    slot_index = IntegerField(default=0)
+
+    class Meta:
+        table_name = "guild_combo_members"
+        indexes = ((("combo", "slot_index"), True),)
+
+
+class GuildPlayerBadge(SharedBaseModel):
+    id = AutoField()
+    guild = ForeignKeyField(Guild, backref="player_badges", on_delete="CASCADE")
+    player = ForeignKeyField(Player, backref="guild_badges", null=True)
+    normalized_username = CharField()
+    badge_code = CharField()
+    badge_level = CharField(null=True)
+    earned_at = DateTimeField()
+    metadata_json = TextField(null=True)
+
+    class Meta:
+        table_name = "guild_player_badges"
+        indexes = ((("guild", "normalized_username", "badge_code", "badge_level"), True),)
+
+
 SHARED_MODELS = (
     Guild,
     GuildClanTag,
@@ -280,4 +330,7 @@ SHARED_MODELS = (
     ObservedGame,
     GameParticipant,
     GuildPlayerAggregate,
+    GuildComboAggregate,
+    GuildComboMember,
+    GuildPlayerBadge,
 )

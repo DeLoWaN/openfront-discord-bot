@@ -11,9 +11,12 @@ def test_shared_models_create_expected_schema():
         BackfillRun,
         CachedOpenFrontGame,
         GameParticipant,
+        GuildComboAggregate,
+        GuildComboMember,
         Guild,
         GuildClanTag,
         GuildPlayerAggregate,
+        GuildPlayerBadge,
         ObservedGame,
         Player,
         PlayerAlias,
@@ -38,6 +41,9 @@ def test_shared_models_create_expected_schema():
             ObservedGame,
             GameParticipant,
             GuildPlayerAggregate,
+            GuildComboAggregate,
+            GuildComboMember,
+            GuildPlayerBadge,
         ]
     )
     database.connect(reuse_if_open=True)
@@ -56,6 +62,9 @@ def test_shared_models_create_expected_schema():
             ObservedGame,
             GameParticipant,
             GuildPlayerAggregate,
+            GuildComboAggregate,
+            GuildComboMember,
+            GuildPlayerBadge,
         ]
     )
 
@@ -135,12 +144,38 @@ def test_shared_models_create_expected_schema():
         win_count=1,
         game_count=1,
     )
+    combo = GuildComboAggregate.create(
+        guild=guild,
+        format_slug="duo",
+        roster_key="ace|bolt",
+        games_together=5,
+        wins_together=4,
+        win_rate=0.8,
+        is_confirmed=1,
+    )
+    GuildComboMember.create(
+        combo=combo,
+        player=player,
+        normalized_username="ace",
+        display_username="Ace",
+        slot_index=0,
+    )
+    badge = GuildPlayerBadge.create(
+        guild=guild,
+        player=player,
+        normalized_username="ace",
+        badge_code="team-grinder",
+        badge_level="Bronze",
+        earned_at=datetime(2026, 3, 12),
+    )
 
     assert getattr(shared_database, "obj", None) is database
     assert aggregate.guild_id == guild.id
     assert aggregate.player_id == player.id
     assert cursor.run_id == run.id
     assert queued_game.cache_entry_id == cache.id
+    assert combo.guild_id == guild.id
+    assert badge.player_id == player.id
 
     try:
         BackfillGame.create(

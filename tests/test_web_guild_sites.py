@@ -40,10 +40,10 @@ def test_web_root_resolves_active_guild_by_subdomain(tmp_path):
     assert "North Guild" in response.text
     assert "NRTH" in response.text
     assert "/leaderboard" in response.text
-    assert '/leaderboard?view=team' in response.text
-    assert '/leaderboard?view=ffa' in response.text
-    assert '/leaderboard?view=support' in response.text
     assert "/players" in response.text
+    assert "/combos" in response.text
+    assert "/wins" in response.text
+    assert "window.__GUILD_CONTEXT__" in response.text
 
 
 def test_web_root_returns_not_found_for_unknown_or_inactive_guild(tmp_path):

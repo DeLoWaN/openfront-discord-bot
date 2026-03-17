@@ -390,13 +390,68 @@ def _infer_team_count(
     return None
 
 
-def _team_difficulty_weight(inferred_num_teams: int | None) -> float:
+def _infer_players_per_team(
+    *,
+    num_teams: Any,
+    player_teams: Any,
+    total_player_count: Any,
+) -> int | None:
+    if isinstance(player_teams, (int, float)):
+        numeric_team_size = int(player_teams)
+        return numeric_team_size if numeric_team_size > 0 else None
+
+    label = str(player_teams or "").strip()
+    if label.isdigit():
+        numeric_team_size = int(label)
+        return numeric_team_size if numeric_team_size > 0 else None
+
+    named_team_sizes = {"duos": 2, "trios": 3, "quads": 4}
+    named_team_size = named_team_sizes.get(label.lower())
+    if named_team_size:
+        return named_team_size
+
+    inferred_num_teams = _infer_team_count(
+        num_teams=num_teams,
+        player_teams=player_teams,
+        total_player_count=total_player_count,
+    )
+    total_players = _safe_int(total_player_count)
+    if inferred_num_teams and total_players > 0 and total_players % inferred_num_teams == 0:
+        players_per_team = total_players // inferred_num_teams
+        return players_per_team if players_per_team > 0 else None
+    return None
+
+
+def _team_difficulty_weight(
+    inferred_num_teams: int | None,
+    *,
+    players_per_team: int | None = None,
+    tracked_guild_teammates: int | None = None,
+) -> float:
     team_count = inferred_num_teams if inferred_num_teams and inferred_num_teams > 1 else 2
-    return 1.0 + (0.25 * math.log2(max(2, team_count)))
+    team_count_factor = 1.0 + (0.25 * math.log2(max(2, team_count)))
+    if not players_per_team or players_per_team <= 0:
+        return team_count_factor
+    small_team_factor = 1.0 + (0.15 * math.log2(max(1.0, 6.0 / players_per_team)))
+    tracked_presence = max(0, min(players_per_team, int(tracked_guild_teammates or 0)))
+    guild_presence_factor = 1.0 + (
+        0.25 * (1.0 - (tracked_presence / players_per_team))
+    )
+    return team_count_factor * small_team_factor * guild_presence_factor
 
 
-def _team_game_points(*, inferred_num_teams: int | None, did_win: bool) -> float:
-    difficulty_weight = _team_difficulty_weight(inferred_num_teams)
+def _team_game_points(
+    *,
+    inferred_num_teams: int | None,
+    players_per_team: int | None = None,
+    tracked_guild_teammates: int | None = None,
+    did_win: bool,
+) -> float:
+    difficulty_weight = _team_difficulty_weight(
+        inferred_num_teams,
+        players_per_team=players_per_team,
+        tracked_guild_teammates=tracked_guild_teammates,
+    )
     points = 10.0 * difficulty_weight
     if did_win:
         points += 6.0 * difficulty_weight
@@ -535,6 +590,21 @@ def _record_team_game_role(payload: dict[str, Any], participant: GameParticipant
     team_role_counts[game_role] = int(team_role_counts.get(game_role, 0) or 0) + 1
 
 
+def _tracked_team_presence_counts(
+    participants: list[GameParticipant],
+) -> dict[tuple[int, str], int]:
+    counts: dict[tuple[int, str], int] = {}
+    for participant in participants:
+        if not _is_team_mode(participant.game.mode_name):
+            continue
+        effective_tag = str(participant.effective_clan_tag or "").strip().upper()
+        if not effective_tag:
+            continue
+        key = (participant.game_id, effective_tag)
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
 def refresh_guild_player_aggregates(
     guild_id: int | Guild,
     *,
@@ -551,6 +621,7 @@ def refresh_guild_player_aggregates(
         .where(GameParticipant.guild == guild)
         .order_by(ObservedGame.started_at, ObservedGame.ended_at, GameParticipant.id)
     )
+    tracked_team_presence = _tracked_team_presence_counts(participants)
 
     grouped: dict[str, dict[str, Any]] = {}
     for participant in participants:
@@ -620,7 +691,20 @@ def refresh_guild_player_aggregates(
                 player_teams=participant.game.player_teams,
                 total_player_count=participant.game.total_player_count,
             )
-            difficulty_weight = _team_difficulty_weight(inferred_num_teams)
+            players_per_team = _infer_players_per_team(
+                num_teams=participant.game.num_teams,
+                player_teams=participant.game.player_teams,
+                total_player_count=participant.game.total_player_count,
+            )
+            tracked_guild_teammates = tracked_team_presence.get(
+                (participant.game_id, str(participant.effective_clan_tag or "").upper()),
+                1,
+            )
+            difficulty_weight = _team_difficulty_weight(
+                inferred_num_teams,
+                players_per_team=players_per_team,
+                tracked_guild_teammates=tracked_guild_teammates,
+            )
             current["_team_presence_score"] += 10.0 * difficulty_weight
             if participant.did_win:
                 current["_team_result_score"] += 6.0 * difficulty_weight
@@ -679,6 +763,12 @@ def refresh_guild_player_aggregates(
         payload.pop("_ffa_result_score", None)
         payload.pop("_team_role_counts", None)
         created.append(GuildPlayerAggregate.create(guild=guild, **payload))
+
+    from .guild_badges import refresh_guild_player_badges
+    from .guild_combo_service import refresh_guild_combo_aggregates
+
+    refresh_guild_combo_aggregates(guild, participants=participants)
+    refresh_guild_player_badges(guild, participants=participants)
     return created
 
 
