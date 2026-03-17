@@ -265,6 +265,76 @@ class GuildPlayerAggregate(SharedBaseModel):
         indexes = ((("guild", "normalized_username"), True),)
 
 
+class GuildPlayerDailySnapshot(SharedBaseModel):
+    id = AutoField()
+    guild = ForeignKeyField(Guild, backref="daily_snapshots", on_delete="CASCADE")
+    player = ForeignKeyField(Player, backref="daily_snapshots", null=True)
+    normalized_username = CharField()
+    display_username = CharField(null=True)
+    snapshot_date = CharField()
+    scope = CharField()
+    score = FloatField(default=0)
+    wins = IntegerField(default=0)
+    games = IntegerField(default=0)
+    win_rate = FloatField(default=0)
+
+    class Meta:
+        table_name = "guild_player_daily_snapshots"
+        indexes = ((("guild", "normalized_username", "snapshot_date", "scope"), True),)
+
+
+class GuildDailyBenchmark(SharedBaseModel):
+    id = AutoField()
+    guild = ForeignKeyField(Guild, backref="daily_benchmarks", on_delete="CASCADE")
+    snapshot_date = CharField()
+    scope = CharField()
+    median_score = FloatField(default=0)
+    leader_score = FloatField(default=0)
+
+    class Meta:
+        table_name = "guild_daily_benchmarks"
+        indexes = ((("guild", "snapshot_date", "scope"), True),)
+
+
+class GuildWeeklyPlayerScore(SharedBaseModel):
+    id = AutoField()
+    guild = ForeignKeyField(Guild, backref="weekly_scores", on_delete="CASCADE")
+    player = ForeignKeyField(Player, backref="weekly_scores", null=True)
+    normalized_username = CharField()
+    display_username = CharField()
+    week_start = CharField()
+    scope = CharField()
+    score = FloatField(default=0)
+    wins = IntegerField(default=0)
+    games = IntegerField(default=0)
+    win_rate = FloatField(default=0)
+
+    class Meta:
+        table_name = "guild_weekly_player_scores"
+        indexes = ((("guild", "normalized_username", "week_start", "scope"), True),)
+
+
+class GuildRecentGameResult(SharedBaseModel):
+    id = AutoField()
+    guild = ForeignKeyField(Guild, backref="recent_game_results", on_delete="CASCADE")
+    openfront_game_id = CharField()
+    game = ForeignKeyField(ObservedGame, backref="recent_results", null=True, on_delete="SET NULL")
+    ended_at = DateTimeField(null=True)
+    mode = CharField()
+    result = CharField()
+    map_name = CharField(null=True)
+    format_label = CharField()
+    team_distribution = CharField(null=True)
+    replay_link = CharField()
+    map_thumbnail_url = CharField(null=True)
+    guild_team_players_json = LongTextField(null=True)
+    winner_players_json = LongTextField(null=True)
+
+    class Meta:
+        table_name = "guild_recent_game_results"
+        indexes = ((("guild", "openfront_game_id"), True),)
+
+
 class GuildComboAggregate(SharedBaseModel):
     id = AutoField()
     guild = ForeignKeyField(Guild, backref="combo_aggregates", on_delete="CASCADE")
@@ -329,6 +399,10 @@ SHARED_MODELS = (
     BackfillGame,
     ObservedGame,
     GameParticipant,
+    GuildPlayerDailySnapshot,
+    GuildDailyBenchmark,
+    GuildWeeklyPlayerScore,
+    GuildRecentGameResult,
     GuildPlayerAggregate,
     GuildComboAggregate,
     GuildComboMember,

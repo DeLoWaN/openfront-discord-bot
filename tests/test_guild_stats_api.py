@@ -49,6 +49,32 @@ def make_client(tmp_path):
         last_ffa_game_at=datetime(2026, 3, 13, 12, 0, 0),
         last_game_at=datetime(2026, 3, 14, 10, 0, 0),
     )
+    GuildPlayerAggregate.create(
+        guild=guild,
+        normalized_username="bolt",
+        display_username="[NU] Bolt",
+        last_observed_clan_tag="NU",
+        win_count=7,
+        game_count=12,
+        team_win_count=5,
+        team_game_count=11,
+        ffa_win_count=2,
+        ffa_game_count=1,
+        team_score=180.0,
+        ffa_score=90.0,
+        team_recent_game_count_30d=8,
+        ffa_recent_game_count_30d=2,
+        donated_troops_total=5000,
+        donated_gold_total=800,
+        donation_action_count=12,
+        support_bonus=24.5,
+        attack_troops_total=125000,
+        attack_action_count=5,
+        role_label="Backliner",
+        last_team_game_at=datetime(2026, 3, 15, 10, 0, 0),
+        last_ffa_game_at=datetime(2026, 3, 14, 12, 0, 0),
+        last_game_at=datetime(2026, 3, 15, 10, 0, 0),
+    )
     return TestClient(create_app())
 
 
@@ -90,3 +116,22 @@ def test_guild_stats_api_exposes_leaderboard_and_scoring_payloads(tmp_path):
     assert profile.json()["sections"]["team"]["recent_games_30d"] == 4
     assert "overall" not in profile.json()["sections"]
     assert missing_view.status_code == 404
+
+
+def test_guild_stats_api_exposes_sortable_columns_ratio_and_explicit_order(tmp_path):
+    client = make_client(tmp_path)
+
+    response = client.get(
+        "/api/leaderboards/team?sort_by=team_recent_game_count_30d&order=asc",
+        headers={"host": "north.example.test"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sort_by"] == "team_recent_game_count_30d"
+    assert payload["order"] == "asc"
+    assert payload["columns"]
+    assert any(column["key"] == "ratio" for column in payload["columns"])
+    assert any(column["key"] == "win_rate" for column in payload["columns"])
+    assert payload["rows"][0]["display_username"] == "Ace"
+    assert payload["rows"][0]["ratio"] == "8/10"

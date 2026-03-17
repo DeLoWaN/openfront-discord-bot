@@ -20,29 +20,76 @@ BADGE_CATALOG: dict[str, dict[str, Any]] = {
     "team-grinder": {
         "label": "Team Grinder",
         "category": "milestone",
+        "description": "Play a large volume of Team games for the guild.",
         "levels": {"Bronze": 10, "Silver": 25, "Gold": 50},
     },
     "field-marshal": {
         "label": "Field Marshal",
         "category": "milestone",
+        "description": "Accumulate Team wins for the guild.",
         "levels": {"Bronze": 5, "Silver": 15, "Gold": 30},
     },
     "lone-wolf": {
         "label": "Lone Wolf",
         "category": "milestone",
+        "description": "Win public FFA games while representing the guild.",
         "levels": {"Bronze": 1, "Silver": 3, "Gold": 7},
     },
-    "quartermaster": {"label": "Quartermaster", "category": "support"},
-    "war-chest": {"label": "War Chest", "category": "support"},
-    "frontline-engine": {"label": "Frontline Engine", "category": "performance"},
-    "big-game-hunter": {"label": "Big Game Hunter", "category": "performance"},
-    "hot-streak": {"label": "Hot Streak", "category": "performance"},
-    "versatile": {"label": "Versatile", "category": "performance"},
-    "cartographer": {"label": "Cartographer", "category": "map"},
-    "marathon": {"label": "Marathon", "category": "performance"},
-    "duo-specialist": {"label": "Duo Specialist", "category": "combo"},
-    "trio-specialist": {"label": "Trio Specialist", "category": "combo"},
-    "quad-specialist": {"label": "Quad Specialist", "category": "combo"},
+    "quartermaster": {
+        "label": "Quartermaster",
+        "category": "support",
+        "description": "Donate heavily through troops or repeated support actions.",
+    },
+    "war-chest": {
+        "label": "War Chest",
+        "category": "support",
+        "description": "Donate a large amount of gold to allied teammates.",
+    },
+    "frontline-engine": {
+        "label": "Frontline Engine",
+        "category": "performance",
+        "description": "Accumulate a major volume of attacking troops.",
+    },
+    "big-game-hunter": {
+        "label": "Big Game Hunter",
+        "category": "performance",
+        "description": "Win in large Team or FFA lobbies.",
+    },
+    "hot-streak": {
+        "label": "Hot Streak",
+        "category": "performance",
+        "description": "Win three guild-tracked games in a row.",
+    },
+    "versatile": {
+        "label": "Versatile",
+        "category": "performance",
+        "description": "Win in both Team and FFA.",
+    },
+    "cartographer": {
+        "label": "Cartographer",
+        "category": "map",
+        "description": "Win on three different maps.",
+    },
+    "marathon": {
+        "label": "Marathon",
+        "category": "performance",
+        "description": "Win a long game lasting at least 30 minutes.",
+    },
+    "duo-specialist": {
+        "label": "Duo Specialist",
+        "category": "combo",
+        "description": "Reach a confirmed guild duo roster.",
+    },
+    "trio-specialist": {
+        "label": "Trio Specialist",
+        "category": "combo",
+        "description": "Reach a confirmed guild trio roster.",
+    },
+    "quad-specialist": {
+        "label": "Quad Specialist",
+        "category": "combo",
+        "description": "Reach a confirmed guild quad roster.",
+    },
 }
 
 
@@ -372,3 +419,54 @@ def list_recent_badge_awards(guild: Guild, *, limit: int = 6) -> list[dict[str, 
         )
         for award in query
     ]
+
+
+def build_player_badge_catalog(
+    guild: Guild,
+    normalized_username: str,
+) -> list[dict[str, Any]]:
+    awards = list_player_badges(guild, normalized_username)
+    awards_by_code: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for award in awards:
+        awards_by_code[award["badge_code"]].append(award)
+
+    catalog = []
+    for badge_code, definition in BADGE_CATALOG.items():
+        badge_awards = awards_by_code.get(badge_code, [])
+        if "levels" in definition:
+            earned_levels = {
+                str(award["badge_level"]): award for award in badge_awards if award.get("badge_level")
+            }
+            levels = []
+            for level_name, threshold in definition["levels"].items():
+                levels.append(
+                    {
+                        "name": level_name,
+                        "threshold": threshold,
+                        "earned": level_name in earned_levels,
+                        "earned_at": earned_levels.get(level_name, {}).get("earned_at"),
+                    }
+                )
+            catalog.append(
+                {
+                    "badge_code": badge_code,
+                    "label": definition["label"],
+                    "category": definition["category"],
+                    "description": definition.get("description"),
+                    "is_locked": not any(level["earned"] for level in levels),
+                    "levels": levels,
+                }
+            )
+            continue
+        earned_award = badge_awards[0] if badge_awards else None
+        catalog.append(
+            {
+                "badge_code": badge_code,
+                "label": definition["label"],
+                "category": definition["category"],
+                "description": definition.get("description"),
+                "is_locked": earned_award is None,
+                "earned_at": earned_award.get("earned_at") if earned_award else None,
+            }
+        )
+    return catalog

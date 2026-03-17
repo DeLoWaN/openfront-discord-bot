@@ -11,12 +11,16 @@ def test_shared_models_create_expected_schema():
         BackfillRun,
         CachedOpenFrontGame,
         GameParticipant,
+        GuildDailyBenchmark,
         GuildComboAggregate,
         GuildComboMember,
+        GuildPlayerDailySnapshot,
         Guild,
         GuildClanTag,
         GuildPlayerAggregate,
         GuildPlayerBadge,
+        GuildRecentGameResult,
+        GuildWeeklyPlayerScore,
         ObservedGame,
         Player,
         PlayerAlias,
@@ -40,6 +44,10 @@ def test_shared_models_create_expected_schema():
             CachedOpenFrontGame,
             ObservedGame,
             GameParticipant,
+            GuildPlayerDailySnapshot,
+            GuildDailyBenchmark,
+            GuildWeeklyPlayerScore,
+            GuildRecentGameResult,
             GuildPlayerAggregate,
             GuildComboAggregate,
             GuildComboMember,
@@ -61,6 +69,10 @@ def test_shared_models_create_expected_schema():
             CachedOpenFrontGame,
             ObservedGame,
             GameParticipant,
+            GuildPlayerDailySnapshot,
+            GuildDailyBenchmark,
+            GuildWeeklyPlayerScore,
+            GuildRecentGameResult,
             GuildPlayerAggregate,
             GuildComboAggregate,
             GuildComboMember,
@@ -144,6 +156,45 @@ def test_shared_models_create_expected_schema():
         win_count=1,
         game_count=1,
     )
+    daily_snapshot = GuildPlayerDailySnapshot.create(
+        guild=guild,
+        normalized_username="ace",
+        snapshot_date="2026-03-16",
+        scope="team",
+        score=100.0,
+        wins=1,
+        games=1,
+        win_rate=1.0,
+    )
+    daily_benchmark = GuildDailyBenchmark.create(
+        guild=guild,
+        snapshot_date="2026-03-16",
+        scope="team",
+        median_score=80.0,
+        leader_score=100.0,
+    )
+    weekly_score = GuildWeeklyPlayerScore.create(
+        guild=guild,
+        normalized_username="ace",
+        display_username="Ace",
+        week_start="2026-03-16",
+        scope="team",
+        score=100.0,
+        wins=1,
+        games=1,
+        win_rate=1.0,
+    )
+    recent_game = GuildRecentGameResult.create(
+        guild=guild,
+        openfront_game_id="game-1",
+        ended_at=datetime(2026, 3, 16, 10, 0, 0),
+        mode="Team",
+        result="win",
+        map_name="Europe",
+        format_label="Duos",
+        team_distribution="6 teams of 2 (Duos)",
+        replay_link="https://openfront.io/w1/game/game-1",
+    )
     combo = GuildComboAggregate.create(
         guild=guild,
         format_slug="duo",
@@ -171,6 +222,10 @@ def test_shared_models_create_expected_schema():
 
     assert getattr(shared_database, "obj", None) is database
     assert aggregate.guild_id == guild.id
+    assert daily_snapshot.guild_id == guild.id
+    assert daily_benchmark.guild_id == guild.id
+    assert weekly_score.guild_id == guild.id
+    assert recent_game.guild_id == guild.id
     assert aggregate.player_id == player.id
     assert cursor.run_id == run.id
     assert queued_game.cache_entry_id == cache.id

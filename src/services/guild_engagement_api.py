@@ -1,123 +1,79 @@
 from __future__ import annotations
 
-from collections import defaultdict
+import json
+from collections import deque
 from datetime import datetime
 from typing import Any
 
-from ..data.shared.models import GameParticipant, Guild, GuildPlayerAggregate, ObservedGame
+from ..data.shared.models import (
+    GameParticipant,
+    Guild,
+    GuildDailyBenchmark,
+    GuildPlayerDailySnapshot,
+    GuildPlayerAggregate,
+    GuildRecentGameResult,
+    GuildWeeklyPlayerScore,
+    ObservedGame,
+)
 from .guild_badges import list_recent_badge_awards
 from .guild_combo_service import combo_counts_by_format, list_combo_rankings
 from .guild_sites import list_guild_clan_tags
-from .openfront_ingestion import (
-    _compute_support_bonus,
-    _ffa_game_points,
-    _infer_players_per_team,
-    _infer_team_count,
-    _is_ffa_mode,
-    _is_team_mode,
-    _team_difficulty_weight,
-    _team_game_points,
-    _win_rate_multiplier,
-    normalize_username,
-    strip_tracked_clan_tag_prefix,
-)
+from .guild_weekly_rankings import build_weekly_rankings_response
+from .openfront_ingestion import normalize_username
 
 
-def _tracked_team_presence_counts(
-    guild: Guild,
-) -> dict[tuple[int, str], int]:
-    counts: dict[tuple[int, str], int] = defaultdict(int)
-    query = (
-        GameParticipant.select(GameParticipant, ObservedGame)
-        .join(ObservedGame)
-        .where(GameParticipant.guild == guild)
-    )
-    for participant in query:
-        if not _is_team_mode(participant.game.mode_name):
-            continue
-        effective_tag = str(participant.effective_clan_tag or "").strip().upper()
-        if not effective_tag:
-            continue
-        counts[(participant.game_id, effective_tag)] += 1
-    return counts
-
-
-def _team_format_label(game: ObservedGame) -> str:
-    if str(game.player_teams or "").strip():
-        return str(game.player_teams)
-    if game.num_teams and game.total_player_count and game.num_teams > 0:
-        players_per_team = int(game.total_player_count / game.num_teams)
-        return f"{game.num_teams} teams of {players_per_team}"
-    if game.num_teams:
-        return f"{game.num_teams} teams"
-    return "Team"
+def _decode_json_rows(value: str | None) -> Any:
+    if not value:
+        return []
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return []
 
 
 def build_recent_results_response(
     guild: Guild,
     *,
     limit: int = 20,
+    result: str | None = None,
 ) -> dict[str, Any]:
-    tracked_tags = set(list_guild_clan_tags(guild))
-    query = list(
-        GameParticipant.select(GameParticipant, ObservedGame)
-        .join(ObservedGame)
-        .where((GameParticipant.guild == guild) & (GameParticipant.did_win == 1))
-        .order_by(ObservedGame.ended_at.desc(), ObservedGame.started_at.desc(), GameParticipant.id.desc())
-    )
-    grouped: dict[tuple[str, str], dict[str, Any]] = {}
-    for participant in query:
-        game = participant.game
-        game_time = game.ended_at or game.started_at
-        if _is_team_mode(game.mode_name):
-            grouping_key = (game.openfront_game_id, str(participant.effective_clan_tag or "").upper())
-        elif _is_ffa_mode(game.mode_name):
-            grouping_key = (game.openfront_game_id, participant.client_id)
-        else:
-            continue
-        current = grouped.setdefault(
-            grouping_key,
-            {
-                "openfront_game_id": game.openfront_game_id,
-                "mode": game.mode_name,
-                "format_label": _team_format_label(game)
-                if _is_team_mode(game.mode_name)
-                else "FFA",
-                "map_name": game.map_name,
-                "ended_at": game_time,
-                "duration_seconds": game.duration_seconds,
-                "replay_link": f"https://openfront.io/#join={game.openfront_game_id}",
-                "winning_tag": participant.effective_clan_tag if _is_team_mode(game.mode_name) else None,
-                "players": [],
-            },
+    query = (
+        GuildRecentGameResult.select()
+        .where(GuildRecentGameResult.guild == guild)
+        .order_by(
+            GuildRecentGameResult.ended_at.desc(),
+            GuildRecentGameResult.openfront_game_id.desc(),
         )
-        current["players"].append(
+    )
+    normalized_result = str(result or "").strip().lower()
+    if normalized_result in {"win", "loss"}:
+        query = query.where(GuildRecentGameResult.result == normalized_result)
+
+    items = []
+    for row in query.limit(limit):
+        items.append(
             {
-                "normalized_username": participant.normalized_username,
-                "display_username": strip_tracked_clan_tag_prefix(
-                    participant.raw_username,
-                    tracked_tags,
-                ),
+                "openfront_game_id": row.openfront_game_id,
+                "ended_at": row.ended_at.isoformat() if row.ended_at else None,
+                "mode": row.mode,
+                "result": row.result,
+                "map_name": row.map_name,
+                "format_label": row.format_label,
+                "team_distribution": row.team_distribution,
+                "replay_link": row.replay_link,
+                "map_thumbnail_url": row.map_thumbnail_url,
+                "guild_team_players": _decode_json_rows(row.guild_team_players_json),
+                "winner_players": _decode_json_rows(row.winner_players_json),
             }
         )
-    items = list(grouped.values())
-    items.sort(
-        key=lambda item: (
-            item["ended_at"] is None,
-            item["ended_at"] or datetime.min,
-            item["openfront_game_id"],
-        ),
-        reverse=True,
-    )
-    serialized = []
-    for item in items[:limit]:
-        serialized.append(
-            {
-                **item,
-                "ended_at": item["ended_at"].isoformat() if item["ended_at"] else None,
-            }
-        )
-    return {"items": serialized}
+    return {"items": items}
+
+
+def _ranked_rows(rows: list[dict[str, Any]], score_key: str) -> list[dict[str, Any]]:
+    ranked = []
+    for index, row in enumerate(rows[:3]):
+        ranked.append({**row, "rank": index + 1, "score_key": score_key})
+    return ranked
 
 
 def build_home_response(guild: Guild) -> dict[str, Any]:
@@ -125,12 +81,13 @@ def build_home_response(guild: Guild) -> dict[str, Any]:
 
     team = build_leaderboard_response(guild, "team")["rows"]
     support = build_leaderboard_response(guild, "support")["rows"]
-    combo_podiums = {}
+    weekly = build_weekly_rankings_response(guild, scope="team", weeks=6)
+    roster_podiums = {}
     pending_counts = {}
     featured_pending = []
     for format_slug in ("duo", "trio", "quad"):
         rankings = list_combo_rankings(guild, format_slug)
-        combo_podiums[format_slug] = rankings["confirmed"][:3]
+        roster_podiums[format_slug] = rankings["confirmed"][:3]
         pending_counts[format_slug] = len(rankings["pending"])
         if rankings["pending"]:
             featured_pending.append(rankings["pending"][0])
@@ -142,6 +99,7 @@ def build_home_response(guild: Guild) -> dict[str, Any]:
         ),
         reverse=True,
     )
+    latest_games_preview = build_recent_results_response(guild, limit=5)["items"]
     return {
         "guild": {
             "display_name": guild.display_name,
@@ -149,26 +107,142 @@ def build_home_response(guild: Guild) -> dict[str, Any]:
             "clan_tags": list_guild_clan_tags(guild),
         },
         "competitive_pulse": {
-            "leaders": team[:3],
-            "most_active": sorted(
-                team,
-                key=lambda row: (
-                    row["team_recent_game_count_30d"],
-                    row["team_score"],
-                    row["display_username"],
+            "leaders": _ranked_rows(team, "team_score"),
+            "most_active": _ranked_rows(
+                sorted(
+                    team,
+                    key=lambda row: (
+                        row["team_recent_game_count_30d"],
+                        row["team_score"],
+                        row["display_username"],
+                    ),
+                    reverse=True,
                 ),
-                reverse=True,
-            )[:3],
-            "support_spotlight": support[:1],
+                "team_recent_game_count_30d",
+            ),
+            "support_spotlight": _ranked_rows(support[:3], "support_bonus"),
         },
-        "combo_podiums": combo_podiums,
+        "roster_podiums": roster_podiums,
+        "combo_podiums": roster_podiums,
+        "pending_roster_teaser": {
+            "counts": pending_counts,
+            "featured": featured_pending[:3],
+        },
         "pending_combo_teaser": {
             "counts": pending_counts,
             "featured": featured_pending[:3],
         },
-        "recent_wins_preview": build_recent_results_response(guild, limit=5)["items"],
+        "latest_games_preview": latest_games_preview,
+        "recent_wins_preview": latest_games_preview,
+        "weekly_pulse": {
+            "scope": weekly["scope"],
+            "rows": weekly["rows"][:3],
+            "movers": weekly["movers"][:3],
+        },
         "recent_badges": list_recent_badge_awards(guild, limit=6),
+        "roster_counts": combo_counts_by_format(guild),
     }
+
+
+def _daily_progression_rows(
+    guild: Guild,
+    normalized_username: str,
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, float]]]:
+    snapshots = list(
+        GuildPlayerDailySnapshot.select()
+        .where(
+            (GuildPlayerDailySnapshot.guild == guild)
+            & (GuildPlayerDailySnapshot.normalized_username == normalized_username)
+            & (GuildPlayerDailySnapshot.scope == "team")
+        )
+        .order_by(GuildPlayerDailySnapshot.snapshot_date)
+    )
+    benchmarks = {
+        row.snapshot_date: {
+            "median_score": round(float(row.median_score or 0.0), 2),
+            "leader_score": round(float(row.leader_score or 0.0), 2),
+        }
+        for row in GuildDailyBenchmark.select().where(
+            (GuildDailyBenchmark.guild == guild)
+            & (GuildDailyBenchmark.scope == "team")
+        )
+    }
+    return (
+        [
+            {
+                "date": row.snapshot_date,
+                "score": round(float(row.score or 0.0), 2),
+                "wins": int(row.wins or 0),
+                "games": int(row.games or 0),
+                "win_rate": round(float(row.win_rate or 0.0), 4),
+            }
+            for row in snapshots
+        ],
+        benchmarks,
+    )
+
+
+def _recent_performance_rows(
+    daily_progression: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not daily_progression:
+        return []
+    recent = daily_progression[-14:]
+    rolling_window: deque[tuple[int, int]] = deque()
+    recent_rows = []
+    previous_score = 0.0
+    previous_wins = 0
+    previous_games = 0
+    for row in recent:
+        daily_wins = max(0, int(row["wins"]) - previous_wins)
+        daily_games = max(0, int(row["games"]) - previous_games)
+        rolling_window.append((daily_wins, daily_games))
+        while len(rolling_window) > 7:
+            rolling_window.popleft()
+        rolling_wins = sum(item[0] for item in rolling_window)
+        rolling_games = sum(item[1] for item in rolling_window)
+        recent_rows.append(
+            {
+                "date": row["date"],
+                "score_delta": round(float(row["score"]) - previous_score, 2),
+                "daily_wins": daily_wins,
+                "daily_games": daily_games,
+                "rolling_win_rate": round(rolling_wins / rolling_games, 4)
+                if rolling_games
+                else 0.0,
+            }
+        )
+        previous_score = float(row["score"])
+        previous_wins = int(row["wins"])
+        previous_games = int(row["games"])
+    return recent_rows
+
+
+def _weekly_score_rows(
+    guild: Guild,
+    normalized_username: str,
+) -> list[dict[str, Any]]:
+    rows = list(
+        GuildWeeklyPlayerScore.select()
+        .where(
+            (GuildWeeklyPlayerScore.guild == guild)
+            & (GuildWeeklyPlayerScore.normalized_username == normalized_username)
+        )
+        .order_by(GuildWeeklyPlayerScore.week_start, GuildWeeklyPlayerScore.scope)
+    )
+    grouped: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        current = grouped.setdefault(
+            row.week_start,
+            {
+                "week_start": row.week_start,
+                "team": 0.0,
+                "ffa": 0.0,
+                "support": 0.0,
+            },
+        )
+        current[row.scope] = round(float(row.score or 0.0), 2)
+    return [grouped[key] for key in sorted(grouped.keys())[-6:]]
 
 
 def build_player_timeseries_response(
@@ -176,121 +250,20 @@ def build_player_timeseries_response(
     normalized_username: str,
 ) -> dict[str, Any]:
     normalized = normalize_username(normalized_username)
-    tracked_presence_counts = _tracked_team_presence_counts(guild)
-    player_rows = list(
-        GameParticipant.select(GameParticipant, ObservedGame)
-        .join(ObservedGame)
-        .where(
-            (GameParticipant.guild == guild)
-            & (GameParticipant.normalized_username == normalized)
-        )
-        .order_by(ObservedGame.started_at, ObservedGame.ended_at, GameParticipant.id)
-    )
-    progression: list[dict[str, Any]] = []
-    recent_form: list[dict[str, Any]] = []
-    team_games = 0
-    team_wins = 0
-    ffa_games = 0
-    ffa_wins = 0
-    donated_troops_total = 0
-    donated_gold_total = 0
-    donation_action_count = 0
-    attack_troops_total = 0
-    team_presence_score = 0.0
-    team_result_score = 0.0
-    ffa_presence_score = 0.0
-    ffa_result_score = 0.0
-
-    for participant in player_rows:
-        game = participant.game
-        game_time = game.ended_at or game.started_at
-        did_win = bool(participant.did_win)
-        donated_troops_total += int(participant.donated_troops_total or 0)
-        donated_gold_total += int(participant.donated_gold_total or 0)
-        donation_action_count += int(participant.donation_action_count or 0)
-        attack_troops_total += int(participant.attack_troops_total or 0)
-        if _is_team_mode(game.mode_name):
-            team_games += 1
-            team_wins += int(did_win)
-            players_per_team = _infer_players_per_team(
-                num_teams=game.num_teams,
-                player_teams=game.player_teams,
-                total_player_count=game.total_player_count,
-            )
-            inferred_num_teams = _infer_team_count(
-                num_teams=game.num_teams,
-                player_teams=game.player_teams,
-                total_player_count=game.total_player_count,
-            )
-            tracked_guild_teammates = tracked_presence_counts.get(
-                (participant.game_id, str(participant.effective_clan_tag or "").upper()),
-                1,
-            )
-            difficulty_weight = _team_difficulty_weight(
-                inferred_num_teams=inferred_num_teams,
-                players_per_team=players_per_team,
-                tracked_guild_teammates=tracked_guild_teammates,
-            )
-            team_presence_score += 10.0 * difficulty_weight
-            if did_win:
-                team_result_score += 6.0 * difficulty_weight
-        elif _is_ffa_mode(game.mode_name):
-            ffa_games += 1
-            ffa_wins += int(did_win)
-            ffa_presence_score += _ffa_game_points(
-                total_player_count=game.total_player_count,
-                did_win=False,
-            )
-            if did_win:
-                ffa_result_score += _ffa_game_points(
-                    total_player_count=game.total_player_count,
-                    did_win=True,
-                ) - _ffa_game_points(total_player_count=game.total_player_count, did_win=False)
-
-        core_team_score = (
-            (team_presence_score + team_result_score) * _win_rate_multiplier(team_wins, team_games)
-            if team_games
-            else 0.0
-        )
-        support_bonus = _compute_support_bonus(
-            {
-                "donated_troops_total": donated_troops_total,
-                "donated_gold_total": donated_gold_total,
-                "donation_action_count": donation_action_count,
-                "attack_troops_total": attack_troops_total,
-            },
-            core_team_score,
-        )
-        ffa_score = (
-            (ffa_presence_score + ffa_result_score) * _win_rate_multiplier(ffa_wins, ffa_games)
-            if ffa_games
-            else 0.0
-        )
-        point = {
-            "ended_at": game_time.isoformat() if game_time else None,
-            "mode": game.mode_name,
-            "did_win": did_win,
-            "team_score": round(core_team_score + support_bonus, 2),
-            "team_games": team_games,
-            "team_wins": team_wins,
-            "ffa_score": round(ffa_score, 2),
-            "ffa_games": ffa_games,
-            "ffa_wins": ffa_wins,
+    daily_progression, benchmarks = _daily_progression_rows(guild, normalized)
+    daily_benchmarks = [
+        {
+            "date": row["date"],
+            "median_score": benchmarks.get(row["date"], {}).get("median_score", 0.0),
+            "leader_score": benchmarks.get(row["date"], {}).get("leader_score", 0.0),
         }
-        progression.append(point)
-        recent_form.append(
-            {
-                "ended_at": point["ended_at"],
-                "mode": game.mode_name,
-                "did_win": did_win,
-                "map_name": game.map_name,
-                "format_label": _team_format_label(game)
-                if _is_team_mode(game.mode_name)
-                else "FFA",
-            }
-        )
-
+        for row in daily_progression
+    ]
     return {
-        "progression": progression,
-        "recent_form": recent_form[-12:],
+        "daily_progression": daily_progression,
+        "daily_benchmarks": daily_benchmarks,
+        "recent_performance": _recent_performance_rows(daily_progression),
+        "weekly_scores": _weekly_score_rows(guild, normalized),
+        "progression": daily_progression,
+        "recent_form": _recent_performance_rows(daily_progression),
     }

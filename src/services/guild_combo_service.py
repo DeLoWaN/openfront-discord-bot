@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
+import json
 from typing import Any
 
 from ..data.shared.models import (
@@ -13,6 +14,7 @@ from ..data.shared.models import (
     ObservedGame,
 )
 from .guild_sites import list_guild_clan_tags
+from .openfront_links import build_openfront_replay_link
 from .openfront_ingestion import (
     _infer_players_per_team,
     _is_team_mode,
@@ -62,6 +64,73 @@ def format_title(format_slug: str) -> str:
     }.get(format_slug, format_slug.title())
 
 
+def _player_payloads_for_game(game: ObservedGame) -> dict[str, dict[str, Any]]:
+    if not game.raw_payload:
+        return {}
+    try:
+        payload = json.loads(game.raw_payload)
+    except json.JSONDecodeError:
+        return {}
+    info = payload.get("info", payload)
+    players = info.get("players")
+    if not isinstance(players, list):
+        return {}
+    return {
+        str(player.get("clientID") or ""): player
+        for player in players
+        if isinstance(player, dict) and str(player.get("clientID") or "")
+    }
+
+
+def _stats_all_zero(stats: Any) -> bool:
+    if not isinstance(stats, dict) or not stats:
+        return True
+    for value in stats.values():
+        if isinstance(value, list):
+            if any(str(item or "0") not in {"0", "0.0", ""} for item in value):
+                return False
+        elif str(value or "0") not in {"0", "0.0", ""}:
+            return False
+    return True
+
+
+def _looks_non_spawned(
+    participant: GameParticipant,
+    player_payload: dict[str, Any] | None,
+) -> bool:
+    if int(participant.attack_troops_total or 0) > 0:
+        return False
+    if int(participant.attack_action_count or 0) > 0:
+        return False
+    if int(participant.donated_troops_total or 0) > 0:
+        return False
+    if int(participant.donated_gold_total or 0) > 0:
+        return False
+    if int(participant.donation_action_count or 0) > 0:
+        return False
+    stats = player_payload.get("stats") if isinstance(player_payload, dict) else None
+    return _stats_all_zero(stats)
+
+
+def _resolved_roster(
+    roster: list[GameParticipant],
+    expected_size: int,
+) -> list[GameParticipant] | None:
+    if len(roster) == expected_size:
+        return roster
+    if len(roster) < expected_size:
+        return None
+    player_payloads = _player_payloads_for_game(roster[0].game)
+    filtered = [
+        row
+        for row in roster
+        if not _looks_non_spawned(row, player_payloads.get(str(row.client_id or "")))
+    ]
+    if len(filtered) == expected_size:
+        return filtered
+    return None
+
+
 def collect_valid_combo_events(
     guild: Guild,
     participants: list[GameParticipant] | None = None,
@@ -86,9 +155,10 @@ def collect_valid_combo_events(
     events: list[ComboEvent] = []
     for (_game_id, _effective_tag, format_slug), roster in grouped.items():
         expected_size = COMBO_FORMAT_SIZES[format_slug]
-        if len(roster) != expected_size:
+        resolved_roster = _resolved_roster(roster, expected_size)
+        if resolved_roster is None:
             continue
-        sorted_roster = sorted(roster, key=lambda row: row.normalized_username)
+        sorted_roster = sorted(resolved_roster, key=lambda row: row.normalized_username)
         members = tuple(
             (
                 row.normalized_username,
@@ -308,7 +378,7 @@ def get_combo_detail(
             "openfront_game_id": event.openfront_game_id,
             "map_name": event.map_name,
             "mode_name": event.mode_name,
-            "replay_link": f"https://openfront.io/#join={event.openfront_game_id}",
+            "replay_link": build_openfront_replay_link(event.openfront_game_id),
         }
         for event in collect_valid_combo_events(guild)
         if event.format_slug == normalized_format and event.roster_key == roster_key

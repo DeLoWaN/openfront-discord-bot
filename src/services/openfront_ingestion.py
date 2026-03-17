@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 import re
 from dataclasses import dataclass
@@ -251,7 +252,7 @@ def _upsert_observed_game(payload: dict[str, Any]) -> ObservedGame:
             ended_at=_parse_epoch_millis(info.get("end"))
             or _parse_iso_datetime(info.get("end")),
             duration_seconds=info.get("duration"),
-            raw_payload=None,
+            raw_payload=json.dumps(payload),
         )
     else:
         game.game_type = _extract_game_type(info)
@@ -267,6 +268,7 @@ def _upsert_observed_game(payload: dict[str, Any]) -> ObservedGame:
             info.get("end")
         )
         game.duration_seconds = info.get("duration")
+        game.raw_payload = json.dumps(payload)
         game.save()
     return game
 
@@ -766,9 +768,11 @@ def refresh_guild_player_aggregates(
 
     from .guild_badges import refresh_guild_player_badges
     from .guild_combo_service import refresh_guild_combo_aggregates
+    from .guild_read_models import refresh_guild_read_models
 
     refresh_guild_combo_aggregates(guild, participants=participants)
     refresh_guild_player_badges(guild, participants=participants)
+    refresh_guild_read_models(guild, participants=participants)
     return created
 
 

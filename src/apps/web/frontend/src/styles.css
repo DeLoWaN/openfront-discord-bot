@@ -110,11 +110,52 @@ button {
   font-size: 0.84rem;
 }
 
+.rank-pill,
+.result-pill,
+.level-pill,
+.history-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.3rem 0.6rem;
+  border-radius: 999px;
+  font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.78rem;
+}
+
+.rank-pill {
+  background: rgba(140, 79, 52, 0.12);
+  color: var(--accent-deep);
+}
+
+.result-pill {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.result-pill-win {
+  background: rgba(79, 111, 82, 0.16);
+  color: #36513a;
+}
+
+.result-pill-loss {
+  background: rgba(140, 79, 52, 0.14);
+  color: #7a3d27;
+}
+
 .main-nav,
 .tab-row {
   display: flex;
   gap: 0.75rem;
   flex-wrap: wrap;
+}
+
+.toolbar-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
 }
 
 .nav-pill,
@@ -136,6 +177,20 @@ button {
   background: rgba(255, 255, 255, 0.96);
 }
 
+.sort-button {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.sort-button:disabled {
+  cursor: default;
+  opacity: 0.75;
+}
+
 .content {
   display: grid;
   gap: 1.25rem;
@@ -149,6 +204,21 @@ button {
   backdrop-filter: blur(14px);
   box-shadow: var(--shadow);
   animation: rise 360ms ease-out;
+}
+
+.scoring-details {
+  margin: 1rem 0 1.25rem;
+}
+
+.scoring-details summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.scoring-list {
+  margin: 0.75rem 0 0;
+  padding-left: 1rem;
+  color: var(--muted);
 }
 
 .split-panel,
@@ -203,6 +273,28 @@ button {
   background: rgba(255, 255, 255, 0.9);
 }
 
+.badge-card.is-locked {
+  opacity: 0.58;
+  text-decoration: line-through;
+}
+
+.level-row {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.75rem;
+}
+
+.level-pill {
+  background: rgba(23, 36, 28, 0.08);
+  color: var(--muted);
+}
+
+.level-pill.is-earned {
+  background: rgba(79, 111, 82, 0.16);
+  color: #36513a;
+}
+
 .metric-card strong,
 .badge-card strong {
   display: block;
@@ -233,6 +325,47 @@ button {
   gap: 0.6rem;
 }
 
+.table-wrap {
+  overflow-x: auto;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0 0.65rem;
+}
+
+.data-table th {
+  padding: 0 0.8rem 0.35rem;
+  text-align: left;
+  font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.data-table td {
+  padding: 0.9rem 0.8rem;
+  border-top: 1px solid rgba(23, 36, 28, 0.08);
+  border-bottom: 1px solid rgba(23, 36, 28, 0.08);
+  background: rgba(255, 255, 255, 0.88);
+}
+
+.data-table td:first-child {
+  border-left: 1px solid rgba(23, 36, 28, 0.08);
+  border-radius: 1rem 0 0 1rem;
+}
+
+.data-table td:last-child {
+  border-right: 1px solid rgba(23, 36, 28, 0.08);
+  border-radius: 0 1rem 1rem 0;
+}
+
+.table-player {
+  display: grid;
+  gap: 0.2rem;
+}
+
 .leaderboard-row {
   padding: 0.95rem 1rem;
   border-radius: 1rem;
@@ -260,6 +393,40 @@ button {
   display: grid;
   gap: 0.75rem;
   margin-top: 1rem;
+}
+
+.winner-groups {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.map-thumb {
+  width: 100%;
+  max-height: 140px;
+  object-fit: cover;
+  border-radius: 0.9rem;
+  margin-bottom: 0.8rem;
+}
+
+.history-matrix {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.history-row {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.history-chips {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.history-chip {
+  background: rgba(23, 36, 28, 0.08);
+  color: var(--ink);
 }
 
 .timeline-item.is-win {
@@ -294,7 +461,7 @@ button {
     padding-inline: 0.9rem;
   }
 
-  .leaderboard-row {
-    grid-template-columns: 1fr;
+  .data-table {
+    min-width: 720px;
   }
 }

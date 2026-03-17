@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..data.shared.models import Guild, GuildPlayerAggregate
-from .guild_badges import list_player_badges
+from .guild_badges import build_player_badge_catalog, list_player_badges
 from .guild_combo_service import list_player_best_partners, list_player_combo_summaries
 from .guild_engagement_api import (
     build_home_response,
@@ -14,6 +14,7 @@ from .guild_leaderboard import get_guild_player_profile, player_state_label
 from .guild_sites import list_guild_clan_tags
 from .openfront_ingestion import strip_tracked_clan_tag_prefix
 from .player_linking import compute_linked_profile_stats
+from .guild_weekly_rankings import build_player_weekly_summary
 
 SUPPORTED_VIEWS = ("team", "ffa", "support")
 DEFAULT_SORT_BY_VIEW = {
@@ -23,6 +24,7 @@ DEFAULT_SORT_BY_VIEW = {
 }
 SORT_FIELDS_BY_VIEW = {
     "team": (
+        "display_username",
         "team_score",
         "team_win_count",
         "team_game_count",
@@ -39,6 +41,7 @@ SORT_FIELDS_BY_VIEW = {
         "last_game_at",
     ),
     "ffa": (
+        "display_username",
         "ffa_score",
         "ffa_win_count",
         "ffa_game_count",
@@ -51,6 +54,7 @@ SORT_FIELDS_BY_VIEW = {
         "last_game_at",
     ),
     "support": (
+        "display_username",
         "support_bonus",
         "donated_troops_total",
         "donated_gold_total",
@@ -60,6 +64,35 @@ SORT_FIELDS_BY_VIEW = {
         "team_score",
         "last_team_game_at",
         "last_game_at",
+    ),
+}
+DEFAULT_ORDER = "desc"
+COLUMNS_BY_VIEW = {
+    "team": (
+        {"key": "display_username", "label": "Player", "sortable": True, "sort_key": "display_username"},
+        {"key": "score", "label": "Score", "sortable": True, "sort_key": "team_score"},
+        {"key": "ratio", "label": "Ratio", "sortable": False},
+        {"key": "win_rate", "label": "Win Rate", "sortable": True, "sort_key": "team_win_rate"},
+        {"key": "team_game_count", "label": "Games", "sortable": True, "sort_key": "team_game_count"},
+        {"key": "games_30d", "label": "Games 30d", "sortable": True, "sort_key": "team_recent_game_count_30d"},
+        {"key": "support_bonus", "label": "Support", "sortable": True, "sort_key": "support_bonus"},
+    ),
+    "ffa": (
+        {"key": "display_username", "label": "Player", "sortable": True, "sort_key": "display_username"},
+        {"key": "score", "label": "Score", "sortable": True, "sort_key": "ffa_score"},
+        {"key": "ratio", "label": "Ratio", "sortable": False},
+        {"key": "win_rate", "label": "Win Rate", "sortable": True, "sort_key": "ffa_win_rate"},
+        {"key": "ffa_game_count", "label": "Games", "sortable": True, "sort_key": "ffa_game_count"},
+        {"key": "games_30d", "label": "Games 30d", "sortable": True, "sort_key": "ffa_recent_game_count_30d"},
+    ),
+    "support": (
+        {"key": "display_username", "label": "Player", "sortable": True, "sort_key": "display_username"},
+        {"key": "score", "label": "Score", "sortable": True, "sort_key": "support_bonus"},
+        {"key": "ratio", "label": "Ratio", "sortable": False},
+        {"key": "win_rate", "label": "Win Rate", "sortable": True, "sort_key": "team_win_rate"},
+        {"key": "team_game_count", "label": "Games", "sortable": True, "sort_key": "team_game_count"},
+        {"key": "games_30d", "label": "Games 30d", "sortable": True, "sort_key": "team_recent_game_count_30d"},
+        {"key": "donation_action_count", "label": "Donations", "sortable": True, "sort_key": "donation_action_count"},
     ),
 }
 
@@ -106,11 +139,16 @@ def _row_payload(
         "game_count": aggregate.game_count,
         "team_win_count": team_win_count,
         "team_game_count": team_game_count,
+        "ratio": f"{team_win_count}/{team_game_count}" if team_game_count else "0/0",
         "team_win_rate": round(team_win_rate, 4),
+        "win_rate": round(team_win_rate, 4),
         "team_score": round(float(aggregate.team_score or 0.0), 2),
+        "score": round(float(aggregate.team_score or 0.0), 2),
         "team_recent_game_count_30d": int(aggregate.team_recent_game_count_30d or 0),
+        "games_30d": int(aggregate.team_recent_game_count_30d or 0),
         "ffa_win_count": ffa_win_count,
         "ffa_game_count": ffa_game_count,
+        "ffa_ratio": f"{ffa_win_count}/{ffa_game_count}" if ffa_game_count else "0/0",
         "ffa_win_rate": round(ffa_win_rate, 4),
         "ffa_score": round(float(aggregate.ffa_score or 0.0), 2),
         "ffa_recent_game_count_30d": int(aggregate.ffa_recent_game_count_30d or 0),
@@ -139,6 +177,7 @@ def build_leaderboard_response(
     view: str,
     *,
     sort_by: str | None = None,
+    order: str | None = None,
 ) -> dict[str, Any]:
     normalized_view = _normalized_view(view)
     tracked_tags = set(list_guild_clan_tags(guild))
@@ -146,21 +185,35 @@ def build_leaderboard_response(
         _row_payload(row, tracked_tags)
         for row in GuildPlayerAggregate.select().where(GuildPlayerAggregate.guild == guild)
     ]
+    for row in rows:
+        if normalized_view == "ffa":
+            row["ratio"] = row["ffa_ratio"]
+            row["win_rate"] = row["ffa_win_rate"]
+            row["score"] = row["ffa_score"]
+            row["games_30d"] = row["ffa_recent_game_count_30d"]
+        elif normalized_view == "support":
+            row["score"] = row["support_bonus"]
+            row["win_rate"] = row["team_win_rate"]
+            row["games_30d"] = row["team_recent_game_count_30d"]
     allowed_sorts = SORT_FIELDS_BY_VIEW[normalized_view]
     sort_field = sort_by if sort_by in allowed_sorts else DEFAULT_SORT_BY_VIEW[normalized_view]
+    normalized_order = "asc" if str(order or "").lower() == "asc" else DEFAULT_ORDER
     rows.sort(
         key=lambda row: (
             row.get(sort_field) is None,
             row.get(sort_field),
             row["display_username"],
         ),
-        reverse=True,
+        reverse=normalized_order != "asc",
     )
     return {
         "view": normalized_view,
         "default_sort": DEFAULT_SORT_BY_VIEW[normalized_view],
+        "default_order": DEFAULT_ORDER,
         "sort_by": sort_field,
+        "order": normalized_order,
         "available_sorts": list(allowed_sorts),
+        "columns": list(COLUMNS_BY_VIEW[normalized_view]),
         "rows": rows,
     }
 
@@ -293,16 +346,21 @@ async def build_player_profile_response(
     badges = list_player_badges(guild, normalized_username)
     best_partners = list_player_best_partners(guild, normalized_username)
     combo_summaries = list_player_combo_summaries(guild, normalized_username)
+    badge_catalog = build_player_badge_catalog(guild, normalized_username)
+    weekly_summary = build_player_weekly_summary(guild, normalized_username, scope="team")
     response = {
         "player": player,
         "badges": badges,
+        "badge_catalog": badge_catalog,
         "best_partners": best_partners,
         "combo_summaries": combo_summaries,
+        "weekly_summary": weekly_summary,
         "sections": {
             "team": {
                 "score": player["team_score"],
                 "wins": player["team_win_count"],
                 "games": player["team_game_count"],
+                "score_note_label": "Wins / Games",
                 "win_rate": player["team_win_rate"],
                 "recent_games_30d": player["team_recent_game_count_30d"],
                 "last_game_at": player["last_team_game_at"],
@@ -311,6 +369,7 @@ async def build_player_profile_response(
                 "score": player["ffa_score"],
                 "wins": player["ffa_win_count"],
                 "games": player["ffa_game_count"],
+                "score_note_label": "Wins / Games",
                 "win_rate": player["ffa_win_rate"],
                 "recent_games_30d": player["ffa_recent_game_count_30d"],
                 "last_game_at": player["last_ffa_game_at"],

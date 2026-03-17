@@ -238,9 +238,14 @@ def _render_spa_shell(
           <a href="/">Home</a>
           <a href="/leaderboard">Leaderboard</a>
           <a href="/players">Players</a>
+          <a href="/rosters">Rosters</a>
+          <a href="/games">Recent games</a>
+          <a href="/weekly">Weekly</a>
+        </nav>
+        <div style="display:none">
           <a href="/combos">Combos</a>
           <a href="/wins">Recent wins</a>
-        </nav>
+        </div>
         <p>Tracked clan tags</p>
         <ul>{tags_markup}</ul>
       </main>
@@ -373,10 +378,21 @@ def create_app(
         return RedirectResponse("/account", status_code=303)
 
     @app.get("/api/leaderboards/{view}")
-    async def guild_leaderboard_api(request: Request, view: str, sort: str | None = None):
+    async def guild_leaderboard_api(
+        request: Request,
+        view: str,
+        sort: str | None = None,
+        sort_by: str | None = None,
+        order: str | None = None,
+    ):
         guild = resolve_request_guild(request)
         try:
-            payload = build_leaderboard_response(guild, resolve_leaderboard_view(view), sort_by=sort)
+            payload = build_leaderboard_response(
+                guild,
+                resolve_leaderboard_view(view),
+                sort_by=sort_by or sort,
+                order=order,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return JSONResponse(payload)
@@ -419,6 +435,7 @@ def create_app(
         guild = resolve_request_guild(request)
         return JSONResponse(build_home_response(guild))
 
+    @app.get("/api/rosters/{format_slug}")
     @app.get("/api/combos/{format_slug}")
     async def guild_combo_rankings_api(request: Request, format_slug: str):
         guild = resolve_request_guild(request)
@@ -428,6 +445,7 @@ def create_app(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return JSONResponse(payload)
 
+    @app.get("/api/rosters/{format_slug}/{roster_key:path}")
     @app.get("/api/combos/{format_slug}/{roster_key:path}")
     async def guild_combo_detail_api(
         request: Request,
@@ -445,6 +463,17 @@ def create_app(
         guild = resolve_request_guild(request)
         return JSONResponse(build_recent_results_response(guild, limit=limit))
 
+    @app.get("/api/weekly")
+    async def guild_weekly_api(request: Request, scope: str = "team", weeks: int = 6):
+        from ...services.guild_weekly_rankings import build_weekly_rankings_response
+
+        guild = resolve_request_guild(request)
+        try:
+            payload = build_weekly_rankings_response(guild, scope=scope, weeks=weeks)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse(payload)
+
     @app.get("/leaderboard", response_class=HTMLResponse)
     async def guild_leaderboard_placeholder(
         request: Request,
@@ -461,13 +490,13 @@ def create_app(
         guild = resolve_request_guild(request)
         return render_public_shell(request, guild)
 
-    @app.get("/combos", response_class=HTMLResponse)
-    async def guild_combos_page(request: Request) -> HTMLResponse:
+    @app.get("/rosters", response_class=HTMLResponse)
+    async def guild_rosters_page(request: Request) -> HTMLResponse:
         guild = resolve_request_guild(request)
         return render_public_shell(request, guild)
 
-    @app.get("/combos/{format_slug}", response_class=HTMLResponse)
-    @app.get("/combos/{format_slug}/{roster_key:path}", response_class=HTMLResponse)
+    @app.get("/rosters/{format_slug}", response_class=HTMLResponse)
+    @app.get("/rosters/{format_slug}/{roster_key:path}", response_class=HTMLResponse)
     async def guild_combo_detail_page(
         request: Request,
         format_slug: str | None = None,
@@ -478,8 +507,25 @@ def create_app(
         _ = roster_key
         return render_public_shell(request, guild)
 
+    @app.get("/games", response_class=HTMLResponse)
+    async def guild_games_page(request: Request) -> HTMLResponse:
+        guild = resolve_request_guild(request)
+        return render_public_shell(request, guild)
+
+    @app.get("/weekly", response_class=HTMLResponse)
+    async def guild_weekly_page(request: Request) -> HTMLResponse:
+        guild = resolve_request_guild(request)
+        return render_public_shell(request, guild)
+
+    @app.get("/combos", response_class=HTMLResponse)
+    @app.get("/combos/{path:path}", response_class=HTMLResponse)
+    async def guild_combos_alias(request: Request, path: str | None = None):
+        guild = resolve_request_guild(request)
+        _ = path
+        return render_public_shell(request, guild)
+
     @app.get("/wins", response_class=HTMLResponse)
-    async def guild_wins_page(request: Request) -> HTMLResponse:
+    async def guild_wins_alias(request: Request):
         guild = resolve_request_guild(request)
         return render_public_shell(request, guild)
 
