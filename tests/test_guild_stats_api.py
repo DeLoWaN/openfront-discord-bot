@@ -135,3 +135,69 @@ def test_guild_stats_api_exposes_sortable_columns_ratio_and_explicit_order(tmp_p
     assert any(column["key"] == "win_rate" for column in payload["columns"])
     assert payload["rows"][0]["display_username"] == "Ace"
     assert payload["rows"][0]["ratio"] == "8/10"
+
+
+def test_guild_stats_api_uses_explicit_view_columns_and_filters_ffa_rows(tmp_path):
+    from src.data.shared.models import GuildPlayerAggregate
+
+    client = make_client(tmp_path)
+    GuildPlayerAggregate.create(
+        guild=1,
+        normalized_username="cedar",
+        display_username="[NU] Cedar",
+        last_observed_clan_tag="NU",
+        win_count=4,
+        game_count=4,
+        team_win_count=4,
+        team_game_count=4,
+        ffa_win_count=0,
+        ffa_game_count=0,
+        team_score=120.0,
+        ffa_score=0.0,
+        team_recent_game_count_30d=4,
+        ffa_recent_game_count_30d=0,
+        donated_troops_total=250,
+        donated_gold_total=25,
+        donation_action_count=2,
+        support_bonus=5.0,
+        attack_troops_total=50000,
+        attack_action_count=4,
+        role_label="Flexible",
+        last_team_game_at=datetime(2026, 3, 16, 10, 0, 0),
+        last_game_at=datetime(2026, 3, 16, 10, 0, 0),
+    )
+
+    team = client.get("/api/leaderboards/team", headers={"host": "north.example.test"})
+    ffa = client.get("/api/leaderboards/ffa", headers={"host": "north.example.test"})
+    support = client.get("/api/leaderboards/support", headers={"host": "north.example.test"})
+
+    assert [column["label"] for column in team.json()["columns"]] == [
+        "Player",
+        "Team Score",
+        "Wins",
+        "Ratio",
+        "Win Rate",
+        "Games",
+        "Games 30d",
+        "Support Bonus",
+        "Role",
+    ]
+    assert [column["label"] for column in ffa.json()["columns"]] == [
+        "Player",
+        "FFA Score",
+        "Wins",
+        "Ratio",
+        "Win Rate",
+        "Games",
+        "Games 30d",
+    ]
+    assert [column["label"] for column in support.json()["columns"]] == [
+        "Player",
+        "Support Bonus",
+        "Troops Donated",
+        "Gold Donated",
+        "Donation Actions",
+        "Games 30d",
+        "Role",
+    ]
+    assert [row["display_username"] for row in ffa.json()["rows"]] == ["Bolt", "Ace"]

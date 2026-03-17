@@ -70,29 +70,62 @@ DEFAULT_ORDER = "desc"
 COLUMNS_BY_VIEW = {
     "team": (
         {"key": "display_username", "label": "Player", "sortable": True, "sort_key": "display_username"},
-        {"key": "score", "label": "Score", "sortable": True, "sort_key": "team_score"},
+        {"key": "team_score", "label": "Team Score", "sortable": True, "sort_key": "team_score"},
+        {"key": "team_win_count", "label": "Wins", "sortable": True, "sort_key": "team_win_count"},
         {"key": "ratio", "label": "Ratio", "sortable": False},
         {"key": "win_rate", "label": "Win Rate", "sortable": True, "sort_key": "team_win_rate"},
         {"key": "team_game_count", "label": "Games", "sortable": True, "sort_key": "team_game_count"},
-        {"key": "games_30d", "label": "Games 30d", "sortable": True, "sort_key": "team_recent_game_count_30d"},
-        {"key": "support_bonus", "label": "Support", "sortable": True, "sort_key": "support_bonus"},
+        {
+            "key": "team_recent_game_count_30d",
+            "label": "Games 30d",
+            "sortable": True,
+            "sort_key": "team_recent_game_count_30d",
+        },
+        {"key": "support_bonus", "label": "Support Bonus", "sortable": True, "sort_key": "support_bonus"},
+        {"key": "role_label", "label": "Role", "sortable": False},
     ),
     "ffa": (
         {"key": "display_username", "label": "Player", "sortable": True, "sort_key": "display_username"},
-        {"key": "score", "label": "Score", "sortable": True, "sort_key": "ffa_score"},
+        {"key": "ffa_score", "label": "FFA Score", "sortable": True, "sort_key": "ffa_score"},
+        {"key": "ffa_win_count", "label": "Wins", "sortable": True, "sort_key": "ffa_win_count"},
         {"key": "ratio", "label": "Ratio", "sortable": False},
         {"key": "win_rate", "label": "Win Rate", "sortable": True, "sort_key": "ffa_win_rate"},
         {"key": "ffa_game_count", "label": "Games", "sortable": True, "sort_key": "ffa_game_count"},
-        {"key": "games_30d", "label": "Games 30d", "sortable": True, "sort_key": "ffa_recent_game_count_30d"},
+        {
+            "key": "ffa_recent_game_count_30d",
+            "label": "Games 30d",
+            "sortable": True,
+            "sort_key": "ffa_recent_game_count_30d",
+        },
     ),
     "support": (
         {"key": "display_username", "label": "Player", "sortable": True, "sort_key": "display_username"},
-        {"key": "score", "label": "Score", "sortable": True, "sort_key": "support_bonus"},
-        {"key": "ratio", "label": "Ratio", "sortable": False},
-        {"key": "win_rate", "label": "Win Rate", "sortable": True, "sort_key": "team_win_rate"},
-        {"key": "team_game_count", "label": "Games", "sortable": True, "sort_key": "team_game_count"},
-        {"key": "games_30d", "label": "Games 30d", "sortable": True, "sort_key": "team_recent_game_count_30d"},
-        {"key": "donation_action_count", "label": "Donations", "sortable": True, "sort_key": "donation_action_count"},
+        {"key": "support_bonus", "label": "Support Bonus", "sortable": True, "sort_key": "support_bonus"},
+        {
+            "key": "donated_troops_total",
+            "label": "Troops Donated",
+            "sortable": True,
+            "sort_key": "donated_troops_total",
+        },
+        {
+            "key": "donated_gold_total",
+            "label": "Gold Donated",
+            "sortable": True,
+            "sort_key": "donated_gold_total",
+        },
+        {
+            "key": "donation_action_count",
+            "label": "Donation Actions",
+            "sortable": True,
+            "sort_key": "donation_action_count",
+        },
+        {
+            "key": "support_recent_game_count_30d",
+            "label": "Games 30d",
+            "sortable": True,
+            "sort_key": "team_recent_game_count_30d",
+        },
+        {"key": "role_label", "label": "Role", "sortable": False},
     ),
 }
 
@@ -185,6 +218,8 @@ def build_leaderboard_response(
         _row_payload(row, tracked_tags)
         for row in GuildPlayerAggregate.select().where(GuildPlayerAggregate.guild == guild)
     ]
+    if normalized_view == "ffa":
+        rows = [row for row in rows if int(row["ffa_game_count"] or 0) > 0]
     for row in rows:
         if normalized_view == "ffa":
             row["ratio"] = row["ffa_ratio"]

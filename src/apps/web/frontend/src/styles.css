@@ -197,6 +197,7 @@ button {
 }
 
 .panel {
+  min-width: 0;
   padding: 1.35rem;
   border: 1px solid var(--border);
   border-radius: 1.5rem;
@@ -326,6 +327,8 @@ button {
 }
 
 .table-wrap {
+  width: 100%;
+  max-width: 100%;
   overflow-x: auto;
 }
 
