@@ -812,6 +812,15 @@ function WeeklyPage() {
   }
 
   const data = weeklyQuery.data;
+  const weekLabels = data.weeks || [];
+  const trendChartData = weekLabels.map((week, index) => {
+    const row = { week };
+    data.rows.slice(0, 5).forEach((player) => {
+      row[player.display_username] = player.history?.[index] ?? 0;
+    });
+    return row;
+  });
+  const trendPalette = ["#8c4f34", "#4f6f52", "#17241c", "#c37b4d", "#799b7d"];
 
   return (
     <Layout
@@ -866,19 +875,55 @@ function WeeklyPage() {
           <h2>Six-Week Trend</h2>
           <p>Current top 10 across the last six UTC weeks.</p>
         </div>
-        <div className="history-matrix">
-          {data.rows.map((row) => (
-            <article className="history-row" key={`history-${row.normalized_username}`}>
-              <strong>{row.display_username}</strong>
-              <div className="history-chips">
-                {row.history.map((value, index) => (
-                  <span className="history-chip" key={`${row.normalized_username}-${index}`}>
-                    {value}
-                  </span>
-                ))}
-              </div>
-            </article>
-          ))}
+        <div className="split-panel">
+          <div>
+            <h3>Trend Chart</h3>
+            <div className="chart-frame">
+              <ResponsiveContainer width="100%" height={280}>
+                <LineChart data={trendChartData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(79, 111, 82, 0.2)" />
+                  <XAxis dataKey="week" />
+                  <YAxis />
+                  <Tooltip />
+                  {data.rows.slice(0, 5).map((player, index) => (
+                    <Line
+                      dataKey={player.display_username}
+                      dot={false}
+                      key={player.normalized_username}
+                      name={player.display_username}
+                      stroke={trendPalette[index % trendPalette.length]}
+                      strokeWidth={3}
+                    />
+                  ))}
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+          <div>
+            <h3>Week Matrix</h3>
+            <div className="table-wrap">
+              <table className="data-table weekly-matrix">
+                <thead>
+                  <tr>
+                    <th>Player</th>
+                    {weekLabels.map((week) => (
+                      <th key={week}>{week}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.rows.map((row) => (
+                    <tr key={`history-${row.normalized_username}`}>
+                      <td>{row.display_username}</td>
+                      {(row.history || []).map((value, index) => (
+                        <td key={`${row.normalized_username}-${weekLabels[index] || index}`}>{value}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       </section>
     </Layout>

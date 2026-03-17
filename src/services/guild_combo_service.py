@@ -18,6 +18,8 @@ from .openfront_links import build_openfront_replay_link
 from .openfront_ingestion import (
     _infer_players_per_team,
     _is_team_mode,
+    _participant_is_no_spawn,
+    _player_payload_map,
     normalize_username,
     strip_tracked_clan_tag_prefix,
 )
@@ -63,55 +65,6 @@ def format_title(format_slug: str) -> str:
         "quad": "Quads",
     }.get(format_slug, format_slug.title())
 
-
-def _player_payloads_for_game(game: ObservedGame) -> dict[str, dict[str, Any]]:
-    if not game.raw_payload:
-        return {}
-    try:
-        payload = json.loads(game.raw_payload)
-    except json.JSONDecodeError:
-        return {}
-    info = payload.get("info", payload)
-    players = info.get("players")
-    if not isinstance(players, list):
-        return {}
-    return {
-        str(player.get("clientID") or ""): player
-        for player in players
-        if isinstance(player, dict) and str(player.get("clientID") or "")
-    }
-
-
-def _stats_all_zero(stats: Any) -> bool:
-    if not isinstance(stats, dict) or not stats:
-        return True
-    for value in stats.values():
-        if isinstance(value, list):
-            if any(str(item or "0") not in {"0", "0.0", ""} for item in value):
-                return False
-        elif str(value or "0") not in {"0", "0.0", ""}:
-            return False
-    return True
-
-
-def _looks_non_spawned(
-    participant: GameParticipant,
-    player_payload: dict[str, Any] | None,
-) -> bool:
-    if int(participant.attack_troops_total or 0) > 0:
-        return False
-    if int(participant.attack_action_count or 0) > 0:
-        return False
-    if int(participant.donated_troops_total or 0) > 0:
-        return False
-    if int(participant.donated_gold_total or 0) > 0:
-        return False
-    if int(participant.donation_action_count or 0) > 0:
-        return False
-    stats = player_payload.get("stats") if isinstance(player_payload, dict) else None
-    return _stats_all_zero(stats)
-
-
 def _resolved_roster(
     roster: list[GameParticipant],
     expected_size: int,
@@ -120,11 +73,11 @@ def _resolved_roster(
         return roster
     if len(roster) < expected_size:
         return None
-    player_payloads = _player_payloads_for_game(roster[0].game)
+    player_payloads = _player_payload_map(roster[0].game)
     filtered = [
         row
         for row in roster
-        if not _looks_non_spawned(row, player_payloads.get(str(row.client_id or "")))
+        if not _participant_is_no_spawn(row, player_payloads.get(str(row.client_id or "")))
     ]
     if len(filtered) == expected_size:
         return filtered

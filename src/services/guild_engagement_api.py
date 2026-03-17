@@ -120,7 +120,10 @@ def build_home_response(guild: Guild) -> dict[str, Any]:
                 ),
                 "team_recent_game_count_30d",
             ),
-            "support_spotlight": _ranked_rows(support[:3], "support_bonus"),
+            "support_spotlight": _ranked_rows(
+                [row for row in support if float(row["support_bonus"] or 0.0) > 0][:3],
+                "support_bonus",
+            ),
         },
         "roster_podiums": roster_podiums,
         "combo_podiums": roster_podiums,

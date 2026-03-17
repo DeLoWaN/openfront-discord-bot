@@ -15,6 +15,8 @@
   truth instead of inferring scope from older code paths.
 - Peewee is the repository ORM for both legacy SQLite and shared MariaDB data.
   Keep using it unless a change explicitly states otherwise.
+- The repository uses Pipenv with the root `Pipfile`/`Pipfile.lock`. Run
+  project commands inside that environment, typically with `pipenv run ...`.
 
 ## 2. Folder Structure
 
@@ -69,6 +71,8 @@
   only where the logic is not already obvious from the code.
 - Keep CLI modules thin. Argument parsing and environment bootstrap belong in
   `src/apps/cli`; operational behavior belongs in `src/services`.
+- Prefer `pipenv run <command>` for repository commands so tools execute
+  against the dependencies declared in the root `Pipfile`.
 - Prefer single-purpose modules colocated near related code rather than adding
   generic utility layers.
 - Preserve public route paths, bot command names, and compatibility imports
@@ -96,7 +100,10 @@
 - Preserve public APIs and behavior unless the user asks to change them, and
   call out any intentional behavior change.
 - After implementing a change, validate the affected behavior with the
-  Playwright MCP before considering the task complete.
+  Playwright MCP before considering the task complete. Verification must cover
+  functional needs end to end, inspect view/controller/data-model coherence,
+  confirm the browser console stays free of errors, and look for visual bugs or
+  inconsistent UI states.
 - Run `basedpyright` after code changes when type safety needs verification;
   `pyrightconfig.json` is the repo's current type-check configuration.
 - Keep new functions and modules single-purpose and close to the code they

@@ -511,6 +511,54 @@ def _compute_support_bonus(payload: dict[str, Any], core_team_score: float) -> f
     return min(core_team_score * 0.20, support_scaled)
 
 
+def _player_payload_map(game: ObservedGame | None) -> dict[str, dict[str, Any]]:
+    if game is None or not game.raw_payload:
+        return {}
+    try:
+        payload = json.loads(game.raw_payload)
+    except json.JSONDecodeError:
+        return {}
+    info = payload.get("info", payload)
+    players = info.get("players")
+    if not isinstance(players, list):
+        return {}
+    return {
+        str(player.get("clientID") or ""): player
+        for player in players
+        if isinstance(player, dict) and str(player.get("clientID") or "")
+    }
+
+
+def _stats_all_zero(stats: Any) -> bool:
+    if not isinstance(stats, dict) or not stats:
+        return True
+    for value in stats.values():
+        if isinstance(value, list):
+            if any(str(item or "0") not in {"0", "0.0", ""} for item in value):
+                return False
+        elif str(value or "0") not in {"0", "0.0", ""}:
+            return False
+    return True
+
+
+def _participant_is_no_spawn(
+    participant: GameParticipant,
+    player_payload: dict[str, Any] | None = None,
+) -> bool:
+    if int(participant.attack_troops_total or 0) > 0:
+        return False
+    if int(participant.attack_action_count or 0) > 0:
+        return False
+    if int(participant.donated_troops_total or 0) > 0:
+        return False
+    if int(participant.donated_gold_total or 0) > 0:
+        return False
+    if int(participant.donation_action_count or 0) > 0:
+        return False
+    stats = player_payload.get("stats") if isinstance(player_payload, dict) else None
+    return _stats_all_zero(stats)
+
+
 def _ffa_difficulty_weight(total_player_count: int | None) -> float:
     player_count = total_player_count if total_player_count and total_player_count > 1 else 2
     return 1.0 + (0.20 * math.log2(max(2, player_count)))
@@ -624,6 +672,9 @@ def refresh_guild_player_aggregates(
         .order_by(ObservedGame.started_at, ObservedGame.ended_at, GameParticipant.id)
     )
     tracked_team_presence = _tracked_team_presence_counts(participants)
+    player_payloads_by_game = {
+        participant.game_id: _player_payload_map(participant.game) for participant in participants
+    }
 
     grouped: dict[str, dict[str, Any]] = {}
     for participant in participants:
@@ -688,6 +739,12 @@ def refresh_guild_player_aggregates(
         if _is_team_mode(participant.game.mode_name):
             current["team_game_count"] += 1
             current["team_win_count"] += int(bool(participant.did_win))
+            is_no_spawn = _participant_is_no_spawn(
+                participant,
+                player_payloads_by_game.get(participant.game_id, {}).get(
+                    str(participant.client_id or "")
+                ),
+            )
             inferred_num_teams = _infer_team_count(
                 num_teams=participant.game.num_teams,
                 player_teams=participant.game.player_teams,
@@ -707,10 +764,11 @@ def refresh_guild_player_aggregates(
                 players_per_team=players_per_team,
                 tracked_guild_teammates=tracked_guild_teammates,
             )
-            current["_team_presence_score"] += 10.0 * difficulty_weight
-            if participant.did_win:
-                current["_team_result_score"] += 6.0 * difficulty_weight
-            _record_team_game_role(current, participant)
+            if not is_no_spawn:
+                current["_team_presence_score"] += 10.0 * difficulty_weight
+                if participant.did_win:
+                    current["_team_result_score"] += 6.0 * difficulty_weight
+                _record_team_game_role(current, participant)
             if _is_recent_game(game_time, cutoff=recent_cutoff):
                 current["team_recent_game_count_30d"] += 1
             if game_time and (

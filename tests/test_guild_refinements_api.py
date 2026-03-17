@@ -185,7 +185,9 @@ def test_refined_engagement_apis_expose_rosters_games_profiles_and_weekly(tmp_pa
     combos_alias = client.get("/api/combos/duo", headers=host)
     recent_games = client.get("/api/results/recent", headers=host)
     profile = client.get("/api/players/ace", headers=host)
+    ghost_profile = client.get("/api/players/ghost", headers=host)
     timeseries = client.get("/api/players/ace/timeseries", headers=host)
+    ghost_timeseries = client.get("/api/players/ghost/timeseries", headers=host)
     weekly = client.get("/api/weekly?scope=team&weeks=6", headers=host)
 
     assert home.status_code == 200
@@ -193,6 +195,11 @@ def test_refined_engagement_apis_expose_rosters_games_profiles_and_weekly(tmp_pa
     assert home.json()["latest_games_preview"][0]["result"] in {"win", "loss"}
     assert "team_distribution" in home.json()["latest_games_preview"][0]
     assert home.json()["weekly_pulse"]["scope"] == "team"
+    assert len(home.json()["competitive_pulse"]["support_spotlight"]) == 1
+    assert all(
+        row["support_bonus"] > 0
+        for row in home.json()["competitive_pulse"]["support_spotlight"]
+    )
 
     assert rosters.status_code == 200
     assert rosters.json()["confirmed"][0]["roster_key"] == "ace|bolt"
@@ -212,17 +219,26 @@ def test_refined_engagement_apis_expose_rosters_games_profiles_and_weekly(tmp_pa
     assert profile.json()["badge_catalog"]
     assert profile.json()["weekly_summary"]["scope"] == "team"
     assert profile.json()["sections"]["team"]["score_note_label"] == "Wins / Games"
+    assert ghost_profile.status_code == 200
+    assert ghost_profile.json()["sections"]["team"]["games"] == 1
+    assert ghost_profile.json()["sections"]["team"]["score"] == 0
+    assert ghost_profile.json()["weekly_summary"]["rank"] is None
 
     assert timeseries.status_code == 200
     assert timeseries.json()["daily_progression"]
     assert timeseries.json()["daily_benchmarks"]
     assert timeseries.json()["recent_performance"]
     assert timeseries.json()["weekly_scores"]
+    assert ghost_timeseries.status_code == 200
+    assert ghost_timeseries.json()["weekly_scores"][-1]["team"] == 0
+    assert ghost_timeseries.json()["weekly_scores"][-1]["support"] == 0
 
     assert weekly.status_code == 200
     assert weekly.json()["scope"] == "team"
     assert weekly.json()["rows"]
     assert "movement" in weekly.json()["rows"][0]
+    assert all(row["score"] > 0 for row in weekly.json()["rows"])
+    assert all(row["normalized_username"] != "ghost" for row in weekly.json()["rows"])
 
 
 def test_public_spa_routes_expose_canonical_rosters_games_and_weekly_pages(tmp_path):

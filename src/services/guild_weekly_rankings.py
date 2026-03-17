@@ -107,7 +107,8 @@ def build_weekly_rankings_response(
         history_by_player.setdefault(row.normalized_username, {})[row.week_start] = row
 
     rows_payload = []
-    for index, row in enumerate(current_rows[:10]):
+    visible_rows = [row for row in current_rows if float(row.score or 0.0) > 0.0]
+    for index, row in enumerate(visible_rows[:10]):
         history = history_by_player.get(row.normalized_username, {})
         trend = [
             round(float(history.get(week_key).score or 0.0), 2)
@@ -161,12 +162,26 @@ def build_player_weekly_summary(
     previous_week = (current_utc_week_start() - timedelta(days=7)).date().isoformat()
     current_rows = _ranked_rows(guild, normalized_scope, current_week)
     previous_rows = _ranked_rows(guild, normalized_scope, previous_week)
+    visible_current_rows = [
+        row for row in current_rows if float(row.score or 0.0) > 0.0
+    ]
+    visible_previous_rows = [
+        row for row in previous_rows if float(row.score or 0.0) > 0.0
+    ]
     current_rank = next(
-        (index + 1 for index, row in enumerate(current_rows) if row.normalized_username == player_key),
+        (
+            index + 1
+            for index, row in enumerate(visible_current_rows)
+            if row.normalized_username == player_key
+        ),
         None,
     )
     previous_rank = next(
-        (index + 1 for index, row in enumerate(previous_rows) if row.normalized_username == player_key),
+        (
+            index + 1
+            for index, row in enumerate(visible_previous_rows)
+            if row.normalized_username == player_key
+        ),
         None,
     )
     current_row = next(

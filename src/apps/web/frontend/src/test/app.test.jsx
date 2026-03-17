@@ -173,6 +173,7 @@ beforeEach(() => {
         new Response(
           JSON.stringify({
             scope: "team",
+            weeks: ["2026-02-09", "2026-02-16", "2026-02-23", "2026-03-02", "2026-03-09", "2026-03-16"],
             rows: [{ rank: 1, normalized_username: "ace", display_username: "Ace", score: 120, movement: { kind: "up", delta: 2 }, history: [10, 20, 40, 50, 80, 120] }],
             movers: [{ normalized_username: "ace", display_username: "Ace", movement: { kind: "up", delta: 2 } }]
           }),
@@ -291,4 +292,15 @@ test("renders recent games and leaderboard sorting controls", async () => {
   });
   expect(screen.getByText(/guild winners/i)).toBeInTheDocument();
   expect(screen.getByText(/watch replay/i)).toBeInTheDocument();
+});
+
+test("renders weekly trends with labeled weeks instead of raw chip history", async () => {
+  renderApp("/weekly");
+
+  await waitFor(() => {
+    expect(screen.getByRole("heading", { name: /weekly/i })).toBeInTheDocument();
+  });
+  expect(screen.getByText("2026-02-09")).toBeInTheDocument();
+  expect(screen.getByText("2026-03-16")).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: /trend chart/i })).toBeInTheDocument();
 });

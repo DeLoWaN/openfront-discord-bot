@@ -23,6 +23,8 @@ from .openfront_ingestion import (
     _infer_team_count,
     _is_ffa_mode,
     _is_team_mode,
+    _participant_is_no_spawn,
+    _player_payload_map,
     _team_difficulty_weight,
     _win_rate_multiplier,
     normalize_username,
@@ -226,6 +228,9 @@ def _refresh_daily_snapshots_and_benchmarks(
 
     tracked_tags = set(list_guild_clan_tags(guild))
     tracked_team_presence = _tracked_team_presence_counts(participants)
+    player_payloads_by_game = {
+        participant.game_id: _player_payload_map(participant.game) for participant in participants
+    }
     state_by_player: dict[str, dict[str, Any]] = {}
     snapshot_payloads: dict[tuple[str, str, str], dict[str, Any]] = {}
 
@@ -270,6 +275,12 @@ def _refresh_daily_snapshots_and_benchmarks(
         if _is_team_mode(participant.game.mode_name):
             payload["team_games"] += 1
             payload["team_wins"] += int(bool(participant.did_win))
+            is_no_spawn = _participant_is_no_spawn(
+                participant,
+                player_payloads_by_game.get(participant.game_id, {}).get(
+                    str(participant.client_id or "")
+                ),
+            )
             difficulty_weight = _team_difficulty_weight(
                 _infer_team_count(
                     num_teams=participant.game.num_teams,
@@ -286,9 +297,10 @@ def _refresh_daily_snapshots_and_benchmarks(
                     1,
                 ),
             )
-            payload["team_presence_score"] += 10.0 * difficulty_weight
-            if participant.did_win:
-                payload["team_result_score"] += 6.0 * difficulty_weight
+            if not is_no_spawn:
+                payload["team_presence_score"] += 10.0 * difficulty_weight
+                if participant.did_win:
+                    payload["team_result_score"] += 6.0 * difficulty_weight
             team_score = round(_core_team_score(payload) + _support_bonus(payload), 2)
             snapshot_payloads[
                 (participant.normalized_username, snapshot_date, "team")
@@ -370,6 +382,9 @@ def _refresh_weekly_scores(
 
     tracked_tags = set(list_guild_clan_tags(guild))
     tracked_team_presence = _tracked_team_presence_counts(participants)
+    player_payloads_by_game = {
+        participant.game_id: _player_payload_map(participant.game) for participant in participants
+    }
     payloads: dict[tuple[str, str], dict[str, Any]] = {}
 
     for participant in participants:
@@ -414,6 +429,12 @@ def _refresh_weekly_scores(
         if _is_team_mode(participant.game.mode_name):
             payload["team_games"] += 1
             payload["team_wins"] += int(bool(participant.did_win))
+            is_no_spawn = _participant_is_no_spawn(
+                participant,
+                player_payloads_by_game.get(participant.game_id, {}).get(
+                    str(participant.client_id or "")
+                ),
+            )
             difficulty_weight = _team_difficulty_weight(
                 _infer_team_count(
                     num_teams=participant.game.num_teams,
@@ -430,9 +451,10 @@ def _refresh_weekly_scores(
                     1,
                 ),
             )
-            payload["team_presence_score"] += 10.0 * difficulty_weight
-            if participant.did_win:
-                payload["team_result_score"] += 6.0 * difficulty_weight
+            if not is_no_spawn:
+                payload["team_presence_score"] += 10.0 * difficulty_weight
+                if participant.did_win:
+                    payload["team_result_score"] += 6.0 * difficulty_weight
         elif _is_ffa_mode(participant.game.mode_name):
             payload["ffa_games"] += 1
             payload["ffa_wins"] += int(bool(participant.did_win))
