@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
+from peewee import IntegrityError
+
 from ..data.shared.models import (
     GameParticipant,
     Guild,
@@ -230,47 +232,80 @@ def _tracked_tags_by_guild_id() -> dict[int, set[str]]:
     return tracked_tags
 
 
-def _upsert_observed_game(payload: dict[str, Any]) -> ObservedGame:
+def _observed_game_values(payload: dict[str, Any]) -> dict[str, Any]:
     info = payload.get("info", payload)
     config = info.get("config", {})
+    return {
+        "game_type": _extract_game_type(info),
+        "map_name": config.get("gameMap"),
+        "mode_name": config.get("gameMode"),
+        "player_teams": config.get("playerTeams"),
+        "num_teams": info.get("numTeams"),
+        "total_player_count": info.get("totalPlayerCount") or config.get("maxPlayers"),
+        "started_at": _parse_epoch_millis(info.get("start"))
+        or _parse_iso_datetime(info.get("start")),
+        "ended_at": _parse_epoch_millis(info.get("end"))
+        or _parse_iso_datetime(info.get("end")),
+        "duration_seconds": info.get("duration"),
+        "raw_payload": json.dumps(payload),
+    }
+
+
+def _upsert_observed_game(payload: dict[str, Any]) -> ObservedGame:
     game_id = _extract_game_id(payload)
     if not game_id:
         raise ValueError("Observed game payload is missing a game id")
+    values = _observed_game_values(payload)
     game = ObservedGame.get_or_none(ObservedGame.openfront_game_id == game_id)
     if game is None:
-        game = ObservedGame.create(
-            openfront_game_id=game_id,
-            game_type=_extract_game_type(info),
-            map_name=config.get("gameMap"),
-            mode_name=config.get("gameMode"),
-            player_teams=config.get("playerTeams"),
-            num_teams=info.get("numTeams"),
-            total_player_count=info.get("totalPlayerCount")
-            or config.get("maxPlayers"),
-            started_at=_parse_epoch_millis(info.get("start"))
-            or _parse_iso_datetime(info.get("start")),
-            ended_at=_parse_epoch_millis(info.get("end"))
-            or _parse_iso_datetime(info.get("end")),
-            duration_seconds=info.get("duration"),
-            raw_payload=json.dumps(payload),
-        )
+        game = ObservedGame.create(openfront_game_id=game_id, **values)
     else:
-        game.game_type = _extract_game_type(info)
-        game.map_name = config.get("gameMap")
-        game.mode_name = config.get("gameMode")
-        game.player_teams = config.get("playerTeams")
-        game.num_teams = info.get("numTeams")
-        game.total_player_count = info.get("totalPlayerCount") or config.get("maxPlayers")
-        game.started_at = _parse_epoch_millis(info.get("start")) or _parse_iso_datetime(
-            info.get("start")
-        )
-        game.ended_at = _parse_epoch_millis(info.get("end")) or _parse_iso_datetime(
-            info.get("end")
-        )
-        game.duration_seconds = info.get("duration")
-        game.raw_payload = json.dumps(payload)
-        game.save()
+        changed_fields: list[Any] = []
+        for field_name, value in values.items():
+            if getattr(game, field_name) != value:
+                setattr(game, field_name, value)
+                changed_fields.append(getattr(ObservedGame, field_name))
+        if changed_fields:
+            changed_fields.append(ObservedGame.updated_at)
+            game.save(only=changed_fields)
     return game
+
+
+def _participant_row_signature(row: dict[str, Any]) -> tuple[Any, ...]:
+    guild = row["guild"]
+    return (
+        _field_int(guild.id),
+        row["raw_username"],
+        row["normalized_username"],
+        row["raw_clan_tag"],
+        row["effective_clan_tag"],
+        row["clan_tag_source"],
+        row["client_id"],
+        int(row["did_win"]),
+        int(row["attack_troops_total"]),
+        int(row["attack_action_count"]),
+        int(row["donated_troops_total"]),
+        int(row["donated_gold_total"]),
+        int(row["donation_action_count"]),
+    )
+
+
+def _existing_participant_signature(participant: GameParticipant) -> tuple[Any, ...]:
+    return (
+        _field_int(participant.guild_id),
+        participant.raw_username,
+        participant.normalized_username,
+        participant.raw_clan_tag,
+        participant.effective_clan_tag,
+        participant.clan_tag_source,
+        participant.client_id,
+        int(participant.did_win),
+        int(participant.attack_troops_total),
+        int(participant.attack_action_count),
+        int(participant.donated_troops_total),
+        int(participant.donated_gold_total),
+        int(participant.donation_action_count),
+    )
 
 
 def ingest_game_payload(
@@ -338,9 +373,17 @@ def ingest_game_payload(
         return GameIngestionSummary(_extract_game_id(payload), set(), 0)
 
     game = _upsert_observed_game(payload)
-    GameParticipant.delete().where(GameParticipant.game == game).execute()
-    for row in matched_rows:
-        GameParticipant.create(game=game, **row)
+    existing_participants = list(
+        GameParticipant.select().where(GameParticipant.game == game).order_by(GameParticipant.id)
+    )
+    existing_signatures = sorted(
+        _existing_participant_signature(participant) for participant in existing_participants
+    )
+    matched_signatures = sorted(_participant_row_signature(row) for row in matched_rows)
+    if existing_signatures != matched_signatures:
+        GameParticipant.delete().where(GameParticipant.game == game).execute()
+        for row in matched_rows:
+            GameParticipant.create(game=game, **row)
 
     if refresh_aggregates:
         for guild_id in matched_guild_ids:
@@ -822,7 +865,31 @@ def refresh_guild_player_aggregates(
         payload.pop("_ffa_presence_score", None)
         payload.pop("_ffa_result_score", None)
         payload.pop("_team_role_counts", None)
-        created.append(GuildPlayerAggregate.create(guild=guild, **payload))
+        try:
+            created.append(GuildPlayerAggregate.create(guild=guild, **payload))
+        except IntegrityError:
+            normalized_username = str(payload["normalized_username"])
+            update_payload = dict(payload)
+            (
+                GuildPlayerAggregate.update(**update_payload)
+                .where(
+                    (GuildPlayerAggregate.guild == guild)
+                    & (
+                        GuildPlayerAggregate.normalized_username
+                        == normalized_username
+                    )
+                )
+                .execute()
+            )
+            created.append(
+                GuildPlayerAggregate.get(
+                    (GuildPlayerAggregate.guild == guild)
+                    & (
+                        GuildPlayerAggregate.normalized_username
+                        == normalized_username
+                    )
+                )
+            )
 
     from .guild_badges import refresh_guild_player_badges
     from .guild_combo_service import refresh_guild_combo_aggregates

@@ -27,6 +27,13 @@ class DiscordOAuthConfig:
     scope: str = "identify"
 
 
+@dataclass(frozen=True)
+class OpenFrontBypassConfig:
+    bypass_header_name: str
+    bypass_header_value: str
+    user_agent: str | None = None
+
+
 @dataclass
 class BotConfig:
     token: str
@@ -36,6 +43,7 @@ class BotConfig:
     results_lobby_poll_seconds: int
     mariadb: MariaDBConfig | None = None
     discord_oauth: DiscordOAuthConfig | None = None
+    openfront: OpenFrontBypassConfig | None = None
 
 
 def _load_mariadb_config(data: dict[str, Any]) -> MariaDBConfig | None:
@@ -110,6 +118,33 @@ def _load_discord_oauth_config(data: dict[str, Any]) -> DiscordOAuthConfig | Non
     )
 
 
+def _load_openfront_config(data: dict[str, Any]) -> OpenFrontBypassConfig | None:
+    raw = data.get("openfront")
+    if raw in (None, ""):
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("openfront must be a mapping")
+
+    bypass_header_name = str(raw.get("bypass_header_name") or "").strip()
+    bypass_header_value = str(raw.get("bypass_header_value") or "").strip()
+    user_agent = str(raw.get("user_agent") or "").strip() or None
+    if not bypass_header_name and not bypass_header_value:
+        return None
+    if not bypass_header_name:
+        raise ValueError(
+            "openfront.bypass_header_name is required when openfront bypass is configured"
+        )
+    if not bypass_header_value:
+        raise ValueError(
+            "openfront.bypass_header_value is required when openfront bypass is configured"
+        )
+    return OpenFrontBypassConfig(
+        bypass_header_name=bypass_header_name,
+        bypass_header_value=bypass_header_value,
+        user_agent=user_agent,
+    )
+
+
 def load_config(path: str | None = None) -> BotConfig:
     config_path = path or os.environ.get(CONFIG_ENV_KEY, DEFAULT_CONFIG_PATH)
     with open(config_path, "r", encoding="utf-8") as fh:
@@ -145,6 +180,7 @@ def load_config(path: str | None = None) -> BotConfig:
     results_lobby_poll_seconds = max(1, results_lobby_poll_seconds)
     mariadb = _load_mariadb_config(data)
     discord_oauth = _load_discord_oauth_config(data)
+    openfront = _load_openfront_config(data)
 
     return BotConfig(
         token=token,
@@ -154,4 +190,5 @@ def load_config(path: str | None = None) -> BotConfig:
         results_lobby_poll_seconds=results_lobby_poll_seconds,
         mariadb=mariadb,
         discord_oauth=discord_oauth,
+        openfront=openfront,
     )

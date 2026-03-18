@@ -1,8 +1,12 @@
 # historical-backfill-pipeline Specification
 
 ## Purpose
-TBD - created by archiving change add-resumable-hybrid-backfill. Update Purpose after archive.
+
+TBD - created by archiving change add-resumable-hybrid-backfill. Update
+Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Discover historical team games by tracked clan sessions
 
 The system SHALL discover historical public team games for guild backfill by
@@ -109,10 +113,11 @@ windows, multiple clan tags, or resumed runs.
 
 The system SHALL fetch queued game details through a bounded worker pool while
 routing every discovery and hydration request through the shared OpenFront
-upstream gate. Historical backfill discovery SHALL use bounded concurrency that
-can exploit the shared gate's two-request global limit, and the pipeline SHALL
-track per-item success and failure state without aborting the entire run on one
-transient error.
+upstream gate. Historical backfill SHALL support operator-selected OpenFront
+gate settings per run, and its ordinary CLI defaults SHALL favor a smoothed
+safe profile over bursty parallel fetches. The pipeline SHALL track per-item
+success and failure state without aborting the entire run on one transient
+error.
 
 #### Scenario: Team and FFA discovery overlap in time
 
@@ -132,6 +137,20 @@ transient error.
 - **WHEN** a queued game detail fetch receives an upstream cooldown signal
 - **THEN** later discovery and hydration work waits on the shared OpenFront
   gate before issuing another upstream request
+
+#### Scenario: Queued game hydration gets a zero-second retry-after
+
+- **WHEN** a queued game detail fetch receives a `429` with an absent or
+  zero-second retry-after value
+- **THEN** the pipeline applies a configured minimum cooldown before retrying
+  so the next request does not immediately re-burst into the upstream limit
+
+#### Scenario: Queued game hydration runs with configured bypass mode
+
+- **WHEN** OpenFront bypass header configuration is present
+- **THEN** historical backfill sends the configured bypass header and optional
+  `User-Agent` on every OpenFront request and does not wait on the shared
+  client-side gate before issuing requests
 
 #### Scenario: Queued game hydration fails transiently
 
@@ -188,24 +207,27 @@ The system SHALL treat prior successful hydration from earlier runs as known
 history during ordinary `start` and `resume` backfills. When newly discovered
 work overlaps games that were already hydrated successfully in an earlier run
 and the cached payload is readable, the ordinary backfill pipeline SHALL
-classify those games as skipped known history before any new upstream fetch or
-payload re-ingestion work is attempted. Explicit `replay` remains the only
-ordinary operator action that reparses known history.
+classify those games as skipped known history during discovery before new
+hydration work is queued, fetched, or re-ingested. Explicit `replay` remains
+the only ordinary operator action that reparses known history. Ordinary
+hydration SHALL retain a compatibility guard that can still classify queued
+rows as skipped known history before any new upstream fetch or payload
+re-ingestion work is attempted.
 
 #### Scenario: Start run overlaps earlier successful readable history
 
 - **WHEN** a new backfill run discovers a game that was already hydrated
   successfully in an earlier run and its cached payload is readable
-- **THEN** ordinary hydration skips that game and records it as known history
-  instead of refetching or re-ingesting it
+- **THEN** ordinary discovery excludes that game from the queued hydration set
+  and records it as known history instead of refetching or re-ingesting it
 
 #### Scenario: Resume run encounters earlier successful readable history
 
 - **WHEN** a resumed backfill run encounters overlap with a game that was
   already hydrated successfully in an earlier run and its cached payload is
   readable
-- **THEN** the resumed run skips that game by default without reparsing it and
-  preserves replay as a separate operator action
+- **THEN** ordinary discovery skips that game by default before queuing new
+  hydration work and preserves replay as a separate operator action
 
 #### Scenario: Explicit replay reprocesses known history
 
@@ -235,4 +257,3 @@ upstream data.
 - **WHEN** explicit replay attempts to read a cached payload that is unreadable
 - **THEN** the system reports a cache-integrity replay failure and does not
   silently perform a new crawl
-

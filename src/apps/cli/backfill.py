@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 import sys
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Sequence
 
@@ -13,14 +15,23 @@ from ...data.database import close_shared_database, init_shared_database
 from ...data.shared.models import BackfillCursor, BackfillRun
 from ...data.shared.schema import bootstrap_shared_schema
 from ...services.historical_backfill import (
+    OpenFrontProbeSummary,
     create_backfill_run,
     discover_ffa_games,
     discover_team_games,
     hydrate_backfill_run,
+    probe_openfront_profile,
     replay_backfill_run,
     reset_ingested_web_data,
     track_backfill_run_rate_limits,
 )
+
+BACKFILL_DEFAULT_OPENFRONT_MAX_IN_FLIGHT = 1
+BACKFILL_DEFAULT_OPENFRONT_SUCCESS_DELAY_SECONDS = 2.2
+BACKFILL_DEFAULT_OPENFRONT_MIN_RATE_LIMIT_COOLDOWN_SECONDS = 2.2
+PROBE_DEFAULT_SAMPLE_SIZE = 100
+PROBE_STOP_AFTER_RATE_LIMITS = 3
+PROBE_STOP_ON_RETRY_AFTER_SECONDS = 30.0
 
 
 def _parse_cli_datetime(value: str) -> datetime:
@@ -45,7 +56,9 @@ def _run_summary(run: BackfillRun) -> str:
         f"run_id={run.id} status={run.status} "
         f"requested_start={run.requested_start.isoformat()} "
         f"requested_end={run.requested_end.isoformat()} "
-        f"discovered={run.discovered_count} cached={run.cached_count} "
+        f"discovered={run.discovered_count} "
+        f"discovery_skipped={run.discovery_skipped_known_count} "
+        f"cached={run.cached_count} "
         f"ingested={run.ingested_count} matched={run.matched_count} "
         f"skipped={run.skipped_known_count} replayed={run.replayed_count} "
         f"failed={run.failed_count} cache_failed={run.cache_failure_count} "
@@ -72,6 +85,41 @@ def _cursor_summary(cursor: BackfillCursor) -> str:
     )
 
 
+def _probe_summary(summary: OpenFrontProbeSummary) -> str:
+    latency_p50 = (
+        f"{summary.latency_p50_seconds:.3f}" if summary.latency_p50_seconds is not None else "-"
+    )
+    latency_p95 = (
+        f"{summary.latency_p95_seconds:.3f}" if summary.latency_p95_seconds is not None else "-"
+    )
+    throughput = (
+        f"{summary.throughput_per_second:.3f}"
+        if summary.throughput_per_second is not None
+        else "-"
+    )
+    retry_after_distribution = ",".join(
+        f"{bucket}:{count}"
+        for bucket, count in sorted(summary.retry_after_distribution.items())
+    ) or "-"
+    return (
+        f"candidates={summary.candidate_count} sampled={summary.sampled_count} "
+        f"attempted={summary.attempted_count} success={summary.success_count} "
+        f"rate_limits={summary.rate_limit_count} "
+        f"zero_retry_after={summary.zero_retry_after_count} "
+        f"other_errors={summary.other_error_count} "
+        f"retry_after_max={summary.retry_after_max} "
+        f"retry_after_distribution={retry_after_distribution} "
+        f"latency_p50={latency_p50} latency_p95={latency_p95} "
+        f"throughput={throughput} "
+        f"profile_max_in_flight={summary.openfront_max_in_flight} "
+        f"profile_success_delay={summary.openfront_success_delay_seconds} "
+        "profile_min_rate_limit_cooldown="
+        f"{summary.openfront_min_rate_limit_cooldown_seconds} "
+        f"stopped_early={summary.stopped_early} "
+        f"stop_reason={summary.stop_reason or '-'}"
+    )
+
+
 def _print_run_status(run_id: int) -> None:
     run = BackfillRun.get_or_none(BackfillRun.id == run_id)
     if run is None:
@@ -86,50 +134,144 @@ def _print_run_status(run_id: int) -> None:
         print(_cursor_summary(cursor))
 
 
+@contextmanager
+def _openfront_profile(
+    *,
+    max_in_flight: int,
+    success_delay_seconds: float,
+    min_rate_limit_cooldown_seconds: float,
+):
+    updates = {
+        "OPENFRONT_MAX_IN_FLIGHT": str(max_in_flight),
+        "OPENFRONT_SUCCESS_DELAY_SECONDS": str(success_delay_seconds),
+        "OPENFRONT_MIN_RATE_LIMIT_COOLDOWN_SECONDS": str(
+            min_rate_limit_cooldown_seconds
+        ),
+    }
+    previous = {name: os.environ.get(name) for name in updates}
+    os.environ.update(updates)
+    try:
+        yield
+    finally:
+        for name, original_value in previous.items():
+            if original_value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = original_value
+
+
 async def _execute_run(
     run_id: int,
     *,
     concurrency: int,
     refresh_batch_size: int,
     progress_every: int,
+    openfront_max_in_flight: int,
+    openfront_success_delay_seconds: float,
+    openfront_min_rate_limit_cooldown_seconds: float,
 ) -> BackfillRun:
-    client = OpenFrontClient()
-    try:
-        logging.info("Starting backfill run %s", run_id)
-        with track_backfill_run_rate_limits(client, run_id):
-            await asyncio.gather(
-                discover_team_games(client, run_id),
-                discover_ffa_games(client, run_id),
+    with _openfront_profile(
+        max_in_flight=openfront_max_in_flight,
+        success_delay_seconds=openfront_success_delay_seconds,
+        min_rate_limit_cooldown_seconds=openfront_min_rate_limit_cooldown_seconds,
+    ):
+        client = OpenFrontClient()
+        config = load_config()
+        if config.openfront is not None:
+            client = OpenFrontClient(bypass_config=config.openfront)
+        try:
+            logging.info("Starting backfill run %s", run_id)
+            with track_backfill_run_rate_limits(client, run_id):
+                await asyncio.gather(
+                    discover_team_games(client, run_id),
+                    discover_ffa_games(client, run_id),
+                )
+                run = await hydrate_backfill_run(
+                    client,
+                    run_id,
+                    concurrency=concurrency,
+                    refresh_batch_size=refresh_batch_size,
+                    progress_every=progress_every,
+                    track_rate_limits=False,
+                )
+            logging.info(
+                "Completed backfill run %s status=%s discovered=%s discovery_skipped=%s cached=%s ingested=%s matched=%s skipped=%s replayed=%s failed=%s cache_failed=%s aggregate_refreshes=%s openfront_rate_limits=%s openfront_retry_after=%s openfront_cooldown_total=%s openfront_cooldown_max=%s",
+                run.id,
+                run.status,
+                run.discovered_count,
+                run.discovery_skipped_known_count,
+                run.cached_count,
+                run.ingested_count,
+                run.matched_count,
+                run.skipped_known_count,
+                run.replayed_count,
+                run.failed_count,
+                run.cache_failure_count,
+                run.refreshed_guild_count,
+                run.openfront_rate_limit_hit_count,
+                run.openfront_retry_after_count,
+                run.openfront_cooldown_seconds_total,
+                run.openfront_cooldown_seconds_max,
             )
-            run = await hydrate_backfill_run(
-                client,
-                run_id,
-                concurrency=concurrency,
-                refresh_batch_size=refresh_batch_size,
-                progress_every=progress_every,
-                track_rate_limits=False,
-            )
-        logging.info(
-            "Completed backfill run %s status=%s discovered=%s cached=%s ingested=%s matched=%s skipped=%s replayed=%s failed=%s cache_failed=%s aggregate_refreshes=%s openfront_rate_limits=%s openfront_retry_after=%s openfront_cooldown_total=%s openfront_cooldown_max=%s",
-            run.id,
-            run.status,
-            run.discovered_count,
-            run.cached_count,
-            run.ingested_count,
-            run.matched_count,
-            run.skipped_known_count,
-            run.replayed_count,
-            run.failed_count,
-            run.cache_failure_count,
-            run.refreshed_guild_count,
-            run.openfront_rate_limit_hit_count,
-            run.openfront_retry_after_count,
-            run.openfront_cooldown_seconds_total,
-            run.openfront_cooldown_seconds_max,
+            return run
+        finally:
+            await client.close()
+
+
+async def _execute_probe(
+    *,
+    start: datetime,
+    end: datetime,
+    sample_size: int,
+    seed: int | None,
+    openfront_max_in_flight: int,
+    openfront_success_delay_seconds: float,
+    openfront_min_rate_limit_cooldown_seconds: float,
+) -> OpenFrontProbeSummary:
+    with _openfront_profile(
+        max_in_flight=openfront_max_in_flight,
+        success_delay_seconds=openfront_success_delay_seconds,
+        min_rate_limit_cooldown_seconds=openfront_min_rate_limit_cooldown_seconds,
+    ):
+        config = load_config()
+        client = (
+            OpenFrontClient(bypass_config=config.openfront)
+            if config.openfront is not None
+            else OpenFrontClient()
         )
-        return run
-    finally:
-        await client.close()
+        try:
+            return await probe_openfront_profile(
+                client,
+                start=start,
+                end=end,
+                sample_size=sample_size,
+                seed=seed,
+                openfront_max_in_flight=openfront_max_in_flight,
+                openfront_success_delay_seconds=openfront_success_delay_seconds,
+                openfront_min_rate_limit_cooldown_seconds=openfront_min_rate_limit_cooldown_seconds,
+                stop_after_rate_limits=PROBE_STOP_AFTER_RATE_LIMITS,
+                stop_on_retry_after_seconds=PROBE_STOP_ON_RETRY_AFTER_SECONDS,
+            )
+        finally:
+            await client.close()
+
+
+def _add_openfront_profile_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--openfront-max-in-flight",
+        type=int,
+        default=BACKFILL_DEFAULT_OPENFRONT_MAX_IN_FLIGHT,
+    )
+    parser.add_argument(
+        "--openfront-success-delay-seconds",
+        type=float,
+        default=BACKFILL_DEFAULT_OPENFRONT_SUCCESS_DELAY_SECONDS,
+    )
+    parser.add_argument(
+        "--openfront-min-rate-limit-cooldown-seconds",
+        type=float,
+        default=BACKFILL_DEFAULT_OPENFRONT_MIN_RATE_LIMIT_COOLDOWN_SECONDS,
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -142,6 +284,7 @@ def build_parser() -> argparse.ArgumentParser:
     start_parser.add_argument("--concurrency", type=int, default=4)
     start_parser.add_argument("--refresh-batch-size", type=int, default=100)
     start_parser.add_argument("--progress-every", type=int, default=100)
+    _add_openfront_profile_arguments(start_parser)
 
     status_parser = subparsers.add_parser("status")
     status_parser.add_argument("--run-id", type=int, required=True)
@@ -151,10 +294,18 @@ def build_parser() -> argparse.ArgumentParser:
     resume_parser.add_argument("--concurrency", type=int, default=4)
     resume_parser.add_argument("--refresh-batch-size", type=int, default=100)
     resume_parser.add_argument("--progress-every", type=int, default=100)
+    _add_openfront_profile_arguments(resume_parser)
 
     replay_parser = subparsers.add_parser("replay")
     replay_parser.add_argument("--run-id", type=int, required=True)
     replay_parser.add_argument("--refresh-batch-size", type=int, default=100)
+
+    probe_parser = subparsers.add_parser("probe-openfront")
+    probe_parser.add_argument("--start", required=True)
+    probe_parser.add_argument("--end", required=True)
+    probe_parser.add_argument("--sample-size", type=int, default=PROBE_DEFAULT_SAMPLE_SIZE)
+    probe_parser.add_argument("--seed", type=int)
+    _add_openfront_profile_arguments(probe_parser)
 
     reset_parser = subparsers.add_parser("reset-data")
     reset_parser.add_argument("--confirm", action="store_true")
@@ -183,6 +334,9 @@ def run_command(args: argparse.Namespace) -> int:
                 concurrency=args.concurrency,
                 refresh_batch_size=args.refresh_batch_size,
                 progress_every=args.progress_every,
+                openfront_max_in_flight=args.openfront_max_in_flight,
+                openfront_success_delay_seconds=args.openfront_success_delay_seconds,
+                openfront_min_rate_limit_cooldown_seconds=args.openfront_min_rate_limit_cooldown_seconds,
             )
         )
         _print_run_status(run.id)
@@ -201,6 +355,9 @@ def run_command(args: argparse.Namespace) -> int:
                 concurrency=args.concurrency,
                 refresh_batch_size=args.refresh_batch_size,
                 progress_every=args.progress_every,
+                openfront_max_in_flight=args.openfront_max_in_flight,
+                openfront_success_delay_seconds=args.openfront_success_delay_seconds,
+                openfront_min_rate_limit_cooldown_seconds=args.openfront_min_rate_limit_cooldown_seconds,
             )
         )
         _print_run_status(run.id)
@@ -214,6 +371,21 @@ def run_command(args: argparse.Namespace) -> int:
             refresh_batch_size=args.refresh_batch_size,
         )
         _print_run_status(run.id)
+        return 0
+
+    if args.command == "probe-openfront":
+        summary = asyncio.run(
+            _execute_probe(
+                start=_parse_cli_datetime(args.start),
+                end=_parse_cli_datetime(args.end),
+                sample_size=args.sample_size,
+                seed=args.seed,
+                openfront_max_in_flight=args.openfront_max_in_flight,
+                openfront_success_delay_seconds=args.openfront_success_delay_seconds,
+                openfront_min_rate_limit_cooldown_seconds=args.openfront_min_rate_limit_cooldown_seconds,
+            )
+        )
+        print(_probe_summary(summary))
         return 0
 
     if args.command == "reset-data":

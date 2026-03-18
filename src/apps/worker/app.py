@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from ...core.config import load_config
 from ...core.openfront import OpenFrontClient
 from ...services.historical_backfill import (
     create_backfill_run,
@@ -85,4 +86,10 @@ class WorkerRuntime:
 
 
 def create_worker() -> WorkerRuntime:
-    return WorkerRuntime()
+    config = load_config()
+    client = (
+        OpenFrontClient(bypass_config=config.openfront)
+        if config.openfront is not None
+        else OpenFrontClient()
+    )
+    return WorkerRuntime(client=client)

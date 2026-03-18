@@ -157,6 +157,175 @@ def test_discover_ffa_games_filters_to_ffa_and_game_start_range(tmp_path):
     assert [row.openfront_game_id for row in queued] == ["ffa-in-range"]
 
 
+def test_probe_openfront_profile_stops_after_large_retry_after_without_writing_backfill_data(
+    tmp_path,
+):
+    from src.data.shared.models import (
+        BackfillGame,
+        BackfillRun,
+        CachedOpenFrontGame,
+        GameParticipant,
+        ObservedGame,
+    )
+    from src.openfront import OpenFrontError
+    from src.services.historical_backfill import probe_openfront_profile
+
+    setup_shared_database(tmp_path)
+
+    class FakeClient:
+        async def fetch_public_games(self, start, end, limit=1000):
+            return [{"game": "g-1"}, {"game": "g-2"}, {"game": "g-3"}]
+
+        async def fetch_game(self, game_id, include_turns=False, retry_on_429=True):
+            assert include_turns is False
+            assert retry_on_429 is False
+            if game_id == "g-1":
+                return {"info": {"gameID": game_id}}
+            if game_id == "g-2":
+                raise OpenFrontError("rate limited", status=429, retry_after=60.0)
+            raise AssertionError(f"probe should have stopped before {game_id}")
+
+    summary = asyncio.run(
+        probe_openfront_profile(
+            FakeClient(),
+            start=datetime(2026, 3, 1),
+            end=datetime(2026, 3, 2),
+            sample_size=3,
+            openfront_max_in_flight=1,
+            openfront_success_delay_seconds=0.5,
+            openfront_min_rate_limit_cooldown_seconds=1.0,
+        )
+    )
+
+    assert summary.candidate_count == 3
+    assert summary.sampled_count == 3
+    assert summary.attempted_count == 2
+    assert summary.success_count == 1
+    assert summary.rate_limit_count == 1
+    assert summary.zero_retry_after_count == 0
+    assert summary.other_error_count == 0
+    assert summary.retry_after_max == 60.0
+    assert summary.stopped_early is True
+    assert summary.stop_reason == "retry_after_ge_30s"
+
+    assert BackfillRun.select().count() == 0
+    assert BackfillGame.select().count() == 0
+    assert CachedOpenFrontGame.select().count() == 0
+    assert ObservedGame.select().count() == 0
+    assert GameParticipant.select().count() == 0
+
+
+def test_discover_team_games_skips_known_readable_history_before_queueing(tmp_path):
+    from src.data.shared.models import BackfillGame, BackfillRun, CachedOpenFrontGame
+    from src.services.guild_sites import provision_guild_site
+    from src.services.historical_backfill import create_backfill_run, discover_team_games
+
+    setup_shared_database(tmp_path)
+    provision_guild_site(
+        slug="north",
+        subdomain="north",
+        display_name="North",
+        clan_tags=["NU"],
+    )
+
+    previous_run = create_backfill_run(
+        start=datetime(2026, 3, 1),
+        end=datetime(2026, 3, 2),
+    )
+    cache = CachedOpenFrontGame.create(
+        openfront_game_id="known-team",
+        game_type="PUBLIC",
+        mode_name="Team",
+        payload_json='{"info":{"gameID":"known-team"}}',
+        turn_payload_json='{"info":{"gameID":"known-team"},"turns":[]}',
+    )
+    BackfillGame.create(
+        run=previous_run,
+        openfront_game_id="known-team",
+        source_type="team",
+        status="completed",
+        cache_entry=cache,
+    )
+
+    class FakeClient:
+        async def fetch_clan_sessions(self, clan_tag, start=None, end=None):
+            return [
+                {"gameId": "known-team", "gameStart": "2026-03-01T10:00:00Z"},
+                {"gameId": "new-team", "gameStart": "2026-03-01T11:00:00Z"},
+            ]
+
+    run = create_backfill_run(
+        start=datetime(2026, 3, 1),
+        end=datetime(2026, 3, 2),
+    )
+
+    discovered = asyncio.run(discover_team_games(FakeClient(), run.id))
+    run = BackfillRun.get_by_id(run.id)
+    queued = list(
+        BackfillGame.select()
+        .where(BackfillGame.run == run)
+        .order_by(BackfillGame.openfront_game_id)
+    )
+
+    assert discovered == 1
+    assert run.discovered_count == 1
+    assert run.discovery_skipped_known_count == 1
+    assert [row.openfront_game_id for row in queued] == ["new-team"]
+
+
+def test_discover_ffa_games_keeps_unreadable_known_cache_eligible_for_queueing(tmp_path):
+    from src.data.shared.models import BackfillGame, BackfillRun, CachedOpenFrontGame
+    from src.services.historical_backfill import create_backfill_run, discover_ffa_games
+
+    setup_shared_database(tmp_path)
+
+    previous_run = create_backfill_run(
+        start=datetime(2026, 3, 1),
+        end=datetime(2026, 3, 2),
+    )
+    cache = CachedOpenFrontGame.create(
+        openfront_game_id="repair-ffa",
+        game_type="PUBLIC",
+        mode_name="Free For All",
+        payload_json='{"info":{"gameID":"repair-ffa"}',
+    )
+    BackfillGame.create(
+        run=previous_run,
+        openfront_game_id="repair-ffa",
+        source_type="ffa",
+        status="completed",
+        cache_entry=cache,
+    )
+
+    class FakeClient:
+        async def fetch_public_games(self, start, end, limit=1000):
+            return [
+                {
+                    "game": "repair-ffa",
+                    "mode": "Free For All",
+                    "start": "2026-03-01T12:00:00Z",
+                }
+            ]
+
+    run = create_backfill_run(
+        start=datetime(2026, 3, 1),
+        end=datetime(2026, 3, 2),
+    )
+
+    discovered = asyncio.run(discover_ffa_games(FakeClient(), run.id))
+    run = BackfillRun.get_by_id(run.id)
+    queued = list(
+        BackfillGame.select()
+        .where(BackfillGame.run == run)
+        .order_by(BackfillGame.openfront_game_id)
+    )
+
+    assert discovered == 1
+    assert run.discovered_count == 1
+    assert run.discovery_skipped_known_count == 0
+    assert [row.openfront_game_id for row in queued] == ["repair-ffa"]
+
+
 def test_hydrate_backfill_run_caches_payloads_and_ingests_matching_games(tmp_path):
     from src.data.shared.models import (
         BackfillGame,
@@ -286,7 +455,7 @@ def test_replay_backfill_run_uses_cached_payloads_without_refetching(tmp_path):
     assert ObservedGame.select().count() == 1
 
 
-def test_hydrate_backfill_run_refreshes_affected_guilds_in_batches(
+def test_hydrate_backfill_run_refreshes_affected_guilds_after_hydration_completes(
     tmp_path,
     monkeypatch,
 ):
@@ -304,6 +473,7 @@ def test_hydrate_backfill_run_refreshes_affected_guilds_in_batches(
 
     class FakeClient:
         async def fetch_game(self, game_id):
+            events.append(f"fetch:{game_id}")
             return {
                 "info": {
                     "gameID": game_id,
@@ -315,10 +485,10 @@ def test_hydrate_backfill_run_refreshes_affected_guilds_in_batches(
                 }
             }
 
-    refreshed = []
+    events = []
 
     def fake_refresh(guild_id):
-        refreshed.append(guild_id)
+        events.append(f"refresh:{guild_id}")
         return []
 
     monkeypatch.setattr(
@@ -348,11 +518,74 @@ def test_hydrate_backfill_run_refreshes_affected_guilds_in_batches(
         historical_backfill.hydrate_backfill_run(
             FakeClient(),
             run.id,
-            refresh_batch_size=10,
+            refresh_batch_size=1,
+            progress_every=1,
         )
     )
 
-    assert refreshed == [guild.id]
+    assert events == [
+        "fetch:game-1",
+        "fetch:game-2",
+        f"refresh:{guild.id}",
+    ]
+
+
+def test_hydrate_backfill_run_skips_aggregate_refresh_when_no_guilds_match(
+    tmp_path,
+    monkeypatch,
+):
+    from src.data.shared.models import BackfillGame
+    from src.services import historical_backfill
+
+    setup_shared_database(tmp_path)
+
+    class FakeClient:
+        async def fetch_game(self, game_id):
+            return {
+                "info": {
+                    "gameID": game_id,
+                    "config": {"gameType": "Public", "gameMode": "Team"},
+                    "winner": ["team", "Team 2", "c9"],
+                    "players": [
+                        {"clientID": "c9", "username": "Enemy", "clanTag": "XYZ"}
+                    ],
+                }
+            }
+
+    refreshed = []
+
+    def fake_refresh(guild_id):
+        refreshed.append(guild_id)
+        return []
+
+    monkeypatch.setattr(
+        historical_backfill,
+        "refresh_guild_player_aggregates",
+        fake_refresh,
+    )
+
+    run = historical_backfill.create_backfill_run(
+        start=datetime(2026, 3, 1),
+        end=datetime(2026, 3, 5),
+    )
+    BackfillGame.create(
+        run=run,
+        openfront_game_id="irrelevant-game",
+        source_type="team",
+        status="pending",
+    )
+
+    hydrated = asyncio.run(
+        historical_backfill.hydrate_backfill_run(
+            FakeClient(),
+            run.id,
+            refresh_batch_size=1,
+            progress_every=1,
+        )
+    )
+
+    assert hydrated.refreshed_guild_count == 0
+    assert refreshed == []
 
 
 def test_worker_runtime_backfill_and_resume_use_durable_runs(tmp_path):
@@ -419,7 +652,8 @@ def test_worker_runtime_backfill_and_resume_use_durable_runs(tmp_path):
 
     assert resumed_run.status == "completed"
     assert resumed_run.ingested_count == 1
-    assert resumed_run.skipped_known_count == 1
+    assert resumed_run.discovery_skipped_known_count == 1
+    assert resumed_run.skipped_known_count == 0
 
 
 def test_worker_runtime_backfill_runs_team_and_ffa_discovery_concurrently(tmp_path):
@@ -507,6 +741,8 @@ def test_hydrate_backfill_run_emits_progress_logs(tmp_path, caplog):
         start=datetime(2026, 3, 1),
         end=datetime(2026, 3, 3),
     )
+    run.discovery_skipped_known_count = 2
+    run.save()
     BackfillGame.create(
         run=run,
         openfront_game_id="log-game",
@@ -526,6 +762,7 @@ def test_hydrate_backfill_run_emits_progress_logs(tmp_path, caplog):
     messages = [record.message for record in caplog.records]
     assert any("hydration_progress" in message for message in messages)
     assert any("hydration_complete" in message for message in messages)
+    assert any("discovery_skipped=2" in message for message in messages)
     assert any("skipped=0" in message for message in messages)
     assert any("cache_failed=0" in message for message in messages)
     assert any("aggregate_refreshes=" in message for message in messages)
@@ -596,6 +833,62 @@ def test_hydrate_backfill_run_tracks_openfront_rate_limits(tmp_path, caplog):
     assert any("status=429" in message for message in messages)
     assert any("retry_after=7.0" in message for message in messages)
     assert any("source=retry-after" in message for message in messages)
+
+
+def test_record_openfront_rate_limit_uses_portable_max_expression(tmp_path):
+    from src.core.openfront import OpenFrontRateLimitEvent
+    from src.data.shared.models import BackfillRun
+    from src.services import historical_backfill
+
+    setup_shared_database(tmp_path)
+
+    query = BackfillRun.update(
+        openfront_cooldown_seconds_max=historical_backfill.Case(
+            None,
+            (
+                (
+                    BackfillRun.openfront_cooldown_seconds_max < 43.0,
+                    43.0,
+                ),
+            ),
+            BackfillRun.openfront_cooldown_seconds_max,
+        )
+    ).where(BackfillRun.id == 1)
+    sql, _params = query.sql()
+
+    assert "CASE" in sql.upper()
+    assert "MAX(" not in sql.upper()
+
+    run = BackfillRun.create(
+        requested_start=datetime(2026, 3, 1),
+        requested_end=datetime(2026, 3, 2),
+    )
+
+    historical_backfill._record_openfront_rate_limit(
+        run.id,
+        OpenFrontRateLimitEvent(
+            status=429,
+            cooldown_seconds=43.0,
+            source="retry-after",
+            url="/public/game/test-1",
+        ),
+    )
+    historical_backfill._record_openfront_rate_limit(
+        run.id,
+        OpenFrontRateLimitEvent(
+            status=429,
+            cooldown_seconds=11.0,
+            source="fallback",
+            url="/public/game/test-2",
+        ),
+    )
+
+    run = BackfillRun.get_by_id(run.id)
+
+    assert run.openfront_rate_limit_hit_count == 2
+    assert run.openfront_retry_after_count == 1
+    assert run.openfront_cooldown_seconds_total == 54.0
+    assert run.openfront_cooldown_seconds_max == 43.0
 
 
 def test_hydrate_backfill_run_skips_games_completed_in_earlier_runs(tmp_path):
@@ -867,12 +1160,11 @@ def test_reset_ingested_web_data_clears_ingestion_tables_only(tmp_path):
     assert PlayerLink.select().count() == 1
 
 
-def test_hydrate_backfill_run_preserves_original_failure_when_db_relookup_drops(
+def test_hydrate_backfill_run_avoids_reloading_each_backfill_row(
     tmp_path, monkeypatch
 ):
     from src.data.shared.models import BackfillGame
     from src.services.historical_backfill import create_backfill_run, hydrate_backfill_run
-    from src.openfront import OpenFrontError
 
     setup_shared_database(tmp_path)
 
@@ -887,31 +1179,34 @@ def test_hydrate_backfill_run_preserves_original_failure_when_db_relookup_drops(
         status="pending",
     )
 
-    class FailingClient:
+    class FakeClient:
         async def fetch_game(self, game_id, include_turns=False):
-            raise OpenFrontError("upstream throttled", status=429, retry_after=30)
+            return {
+                "info": {
+                    "gameID": game_id,
+                    "config": {"gameType": "Public", "gameMode": "Team"},
+                    "winner": ["team", "Team 2", "c9"],
+                    "players": [
+                        {"clientID": "c9", "username": "Enemy", "clanTag": "XYZ"}
+                    ],
+                }
+            }
 
-    original_get_by_id = BackfillGame.get_by_id
-    get_calls = {"count": 0}
+    def fail_get_by_id(cls, pk):
+        raise AssertionError(f"unexpected BackfillGame.get_by_id({pk})")
 
-    def flaky_get_by_id(cls, pk):
-        get_calls["count"] += 1
-        if get_calls["count"] == 1:
-            return original_get_by_id(pk)
-        raise InterfaceError(0, "")
-
-    monkeypatch.setattr(BackfillGame, "get_by_id", classmethod(flaky_get_by_id))
+    monkeypatch.setattr(BackfillGame, "get_by_id", classmethod(fail_get_by_id))
 
     hydrated = asyncio.run(
         hydrate_backfill_run(
-            FailingClient(),
+            FakeClient(),
             run.id,
             progress_every=1,
         )
     )
+
     queued = BackfillGame.select().where(BackfillGame.id == queued.id).get()
 
-    assert hydrated.status == "completed_with_failures"
-    assert hydrated.failed_count == 1
-    assert queued.status == "failed"
-    assert queued.last_error == "upstream throttled"
+    assert hydrated.status == "completed"
+    assert hydrated.failed_count == 0
+    assert queued.status == "completed"

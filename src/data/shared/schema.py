@@ -78,6 +78,11 @@ def run_shared_migrations(database) -> None:
     ensure_column(database, site_user_table, "last_login_at", "DATETIME NULL")
 
     additive_columns = (
+        (
+            "backfill_runs",
+            "discovery_skipped_known_count",
+            "INTEGER NOT NULL DEFAULT 0",
+        ),
         ("backfill_runs", "skipped_known_count", "INTEGER NOT NULL DEFAULT 0"),
         ("backfill_runs", "replayed_count", "INTEGER NOT NULL DEFAULT 0"),
         ("backfill_runs", "cache_failure_count", "INTEGER NOT NULL DEFAULT 0"),

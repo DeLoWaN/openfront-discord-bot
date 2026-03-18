@@ -36,6 +36,8 @@ def test_bootstrap_shared_schema_creates_tables_and_runs_additive_migrations():
     assert "backfill_cursors" in table_names
     assert "backfill_games" in table_names
     assert "cached_openfront_games" in table_names
+    backfill_run_columns = {column.name for column in database.get_columns("backfill_runs")}
+    assert "discovery_skipped_known_count" in backfill_run_columns
 
 
 def test_bootstrap_shared_schema_uses_longtext_for_cached_payload_columns():

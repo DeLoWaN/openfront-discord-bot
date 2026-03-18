@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import aiohttp
 
+from .config import OpenFrontBypassConfig
 from ..data.database import shared_database
 
 OPENFRONT_BASE = "https://api.openfront.io"
@@ -22,6 +23,7 @@ OPENFRONT_GATE_LEASE_SECONDS = 30.0
 OPENFRONT_MAX_IN_FLIGHT = 2
 OPENFRONT_GATE_WAIT_POLL_SECONDS = 0.05
 OPENFRONT_SUCCESS_DELAY_SECONDS = 0.5
+OPENFRONT_MIN_RATE_LIMIT_COOLDOWN_SECONDS = 1.0
 OPENFRONT_RESET_HEADERS = (
     "ratelimit-reset",
     "x-ratelimit-reset",
@@ -33,6 +35,52 @@ _LOCAL_GATE_LOCKS: dict[int, asyncio.Lock] = {}
 _LOCAL_COOLDOWN_UNTIL: datetime | None = None
 _LOCAL_ACTIVE_LEASES = 0
 _LOCAL_LEASE_EXPIRES_AT: datetime | None = None
+
+
+def _env_int(name: str, default: int, *, minimum: int) -> int:
+    raw_value = os.environ.get(name)
+    if raw_value in (None, ""):
+        return default
+    try:
+        parsed = int(raw_value)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, parsed)
+
+
+def _env_float(name: str, default: float, *, minimum: float) -> float:
+    raw_value = os.environ.get(name)
+    if raw_value in (None, ""):
+        return default
+    try:
+        parsed = float(raw_value)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, parsed)
+
+
+def _openfront_max_in_flight() -> int:
+    return _env_int(
+        "OPENFRONT_MAX_IN_FLIGHT",
+        OPENFRONT_MAX_IN_FLIGHT,
+        minimum=1,
+    )
+
+
+def _openfront_success_delay_seconds() -> float:
+    return _env_float(
+        "OPENFRONT_SUCCESS_DELAY_SECONDS",
+        OPENFRONT_SUCCESS_DELAY_SECONDS,
+        minimum=0.0,
+    )
+
+
+def _openfront_min_rate_limit_cooldown_seconds() -> float:
+    return _env_float(
+        "OPENFRONT_MIN_RATE_LIMIT_COOLDOWN_SECONDS",
+        OPENFRONT_MIN_RATE_LIMIT_COOLDOWN_SECONDS,
+        minimum=0.0,
+    )
 
 
 class OpenFrontError(Exception):
@@ -180,10 +228,11 @@ def _reset_local_leases_if_expired(now: datetime) -> None:
 def _local_wait_or_acquire() -> float:
     global _LOCAL_ACTIVE_LEASES, _LOCAL_LEASE_EXPIRES_AT
     now = _utcnow_naive()
+    max_in_flight = _openfront_max_in_flight()
     _reset_local_leases_if_expired(now)
     if _LOCAL_COOLDOWN_UNTIL and _LOCAL_COOLDOWN_UNTIL > now:
         return (_LOCAL_COOLDOWN_UNTIL - now).total_seconds()
-    if _LOCAL_ACTIVE_LEASES >= OPENFRONT_MAX_IN_FLIGHT:
+    if _LOCAL_ACTIVE_LEASES >= max_in_flight:
         if _LOCAL_LEASE_EXPIRES_AT and _LOCAL_LEASE_EXPIRES_AT > now:
             return min(
                 (_LOCAL_LEASE_EXPIRES_AT - now).total_seconds(),
@@ -227,6 +276,7 @@ def _shared_wait_or_acquire(owner_id: str) -> float | None:
             query = query.for_update()
         state = query.get()
         now = _utcnow_naive()
+        max_in_flight = _openfront_max_in_flight()
 
         if state.lease_expires_at and state.lease_expires_at <= now:
             state.active_leases = 0
@@ -237,7 +287,7 @@ def _shared_wait_or_acquire(owner_id: str) -> float | None:
             state.save()
             return (state.cooldown_until - now).total_seconds()
 
-        if state.active_leases >= OPENFRONT_MAX_IN_FLIGHT:
+        if state.active_leases >= max_in_flight:
             if state.lease_expires_at and state.lease_expires_at > now:
                 state.save()
                 return min(
@@ -354,6 +404,10 @@ class OpenFrontClient:
         self,
         session: aiohttp.ClientSession | None = None,
         on_rate_limit: Callable[[OpenFrontRateLimitEvent], None] | None = None,
+        bypass_header_name: str | None = None,
+        bypass_header_value: str | None = None,
+        user_agent: str | None = None,
+        bypass_config: OpenFrontBypassConfig | None = None,
     ):
         self._session = session
         self._owns_session = session is None
@@ -361,6 +415,13 @@ class OpenFrontClient:
         self._rate_limit_observers: list[Callable[[OpenFrontRateLimitEvent], None]] = []
         if on_rate_limit is not None:
             self._rate_limit_observers.append(on_rate_limit)
+        if bypass_config is not None:
+            bypass_header_name = bypass_config.bypass_header_name
+            bypass_header_value = bypass_config.bypass_header_value
+            user_agent = bypass_config.user_agent
+        self._bypass_header_name = str(bypass_header_name or "").strip() or None
+        self._bypass_header_value = str(bypass_header_value or "").strip() or None
+        self._user_agent = str(user_agent or "").strip() or None
 
     async def close(self):
         if self._owns_session and self._session:
@@ -416,21 +477,34 @@ class OpenFrontClient:
         retry_on_429: bool = True,
         ignore_content_type: bool = False,
     ) -> tuple[Any, Dict[str, str]]:
-        del retry_on_429
-
         if self._session is None:
             self._session = aiohttp.ClientSession()
         if path.startswith("http"):
             url = path
         else:
             url = f"{base or OPENFRONT_BASE}{path}"
+        request_headers: dict[str, str] = {}
+        if self._bypass_header_name and self._bypass_header_value:
+            request_headers[self._bypass_header_name] = self._bypass_header_value
+        if self._user_agent:
+            request_headers["User-Agent"] = self._user_agent
+        if not request_headers:
+            request_headers = None  # type: ignore[assignment]
         fail_fast = set(fail_fast_statuses or [])
         backoff = 1.0
         last_status: int | None = None
         for attempt in range(5):
-            lease = await _acquire_request_gate(self._request_owner)
+            lease = (
+                None
+                if request_headers is not None
+                else await _acquire_request_gate(self._request_owner)
+            )
             try:
-                async with self._session.request(method, url) as resp:
+                async with self._session.request(
+                    method,
+                    url,
+                    headers=request_headers,
+                ) as resp:
                     headers = {
                         key.lower(): value for key, value in resp.headers.items()
                     }
@@ -438,28 +512,42 @@ class OpenFrontClient:
                         headers
                     )
                     if resp.status in fail_fast:
-                        lease.release(
-                            rate_limit_delay or 0.0,
-                            f"status:{resp.status}",
-                        )
+                        if lease is not None:
+                            lease.release(
+                                rate_limit_delay or 0.0,
+                                f"status:{resp.status}",
+                            )
                         raise OpenFrontError(
                             f"Failed request {url}: {resp.status}",
                             resp.status,
                             retry_after=rate_limit_delay,
                         )
                     if resp.status in (429, 500, 502, 503, 504):
-                        retry_delay = (
-                            rate_limit_delay
-                            if rate_limit_delay is not None
-                            else backoff + random.random()
-                        )
+                        if request_headers is not None and resp.status == 429:
+                            LOGGER.warning(
+                                "OpenFront returned 429 while bypass header %s was configured; are you sure about your bypass key? url=%s",
+                                self._bypass_header_name,
+                                url,
+                            )
+                        if resp.status == 429:
+                            retry_delay = max(
+                                rate_limit_delay or 0.0,
+                                _openfront_min_rate_limit_cooldown_seconds(),
+                            )
+                        else:
+                            retry_delay = (
+                                rate_limit_delay
+                                if rate_limit_delay is not None
+                                else backoff + random.random()
+                            )
                         self._emit_rate_limit_event(
                             status=resp.status,
                             cooldown_seconds=retry_delay,
                             source=rate_limit_source or "fallback",
                             url=url,
                         )
-                        lease.release(retry_delay, f"status:{resp.status}")
+                        if lease is not None:
+                            lease.release(retry_delay, f"status:{resp.status}")
                         raise OpenFrontError(
                             f"Transient error {resp.status}",
                             resp.status,
@@ -470,14 +558,22 @@ class OpenFrontClient:
                         payload = await resp.json(content_type=None)
                     else:
                         payload = await resp.json()
-                    lease.release(
-                        max(rate_limit_delay or 0.0, OPENFRONT_SUCCESS_DELAY_SECONDS),
-                        "success",
-                    )
+                    if lease is not None:
+                        lease.release(
+                            max(
+                                rate_limit_delay or 0.0,
+                                _openfront_success_delay_seconds(),
+                            ),
+                            "success",
+                        )
                     return payload, headers
             except OpenFrontError as exc:
                 last_status = exc.status or last_status
                 if exc.status in fail_fast:
+                    raise
+                if request_headers is not None and exc.status == 429:
+                    raise
+                if exc.status == 429 and not retry_on_429:
                     raise
                 if attempt == 4:
                     raise OpenFrontError(
@@ -489,7 +585,8 @@ class OpenFrontClient:
                 continue
             except Exception as exc:
                 delay = backoff + random.random()
-                lease.release(delay, "transport_error")
+                if lease is not None:
+                    lease.release(delay, "transport_error")
                 status = getattr(exc, "status", None)
                 last_status = status or last_status
                 if status in fail_fast:
@@ -632,12 +729,14 @@ class OpenFrontClient:
         game_id: str,
         *,
         include_turns: bool = False,
+        retry_on_429: bool = True,
     ) -> Dict[str, Any]:
         suffix = "" if include_turns else "?turns=false"
         return await self._request(
             "GET",
             f"/public/game/{game_id}{suffix}",
             fail_fast_statuses={404},
+            retry_on_429=retry_on_429,
         )
 
     async def fetch_public_lobbies(self) -> List[Dict[str, Any]]:

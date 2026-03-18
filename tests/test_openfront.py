@@ -3,6 +3,7 @@ from email.utils import format_datetime
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlparse
 
+import pytest
 from peewee import SqliteDatabase
 
 from src.core import openfront as openfront_module
@@ -146,8 +147,8 @@ class QueueSession:
         self.responses = list(responses)
         self.requests = []
 
-    def request(self, method, url):
-        self.requests.append((method, url, self.clock.now()))
+    def request(self, method, url, **kwargs):
+        self.requests.append((method, url, self.clock.now(), kwargs))
         return self.responses.pop(0)
 
     async def close(self):
@@ -251,6 +252,80 @@ def test_openfront_clients_allow_two_parallel_requests_and_throttle_third(
     assert max(clock.sleep_calls) == 0.5
 
 
+def test_openfront_gate_allows_env_tuned_parallelism(tmp_path, monkeypatch):
+    setup_shared_database(tmp_path)
+    clock = FakeClock(datetime(2026, 3, 14, 0, 0, 0))
+    started_events = [asyncio.Event() for _ in range(4)]
+    release_first_four = asyncio.Event()
+    sessions = [
+        QueueSession(
+            clock,
+            [WaitingResponse(200, {"playerId": f"p{index}"}, started, release_first_four)],
+        )
+        for index, started in enumerate(started_events, start=1)
+    ]
+    fifth_session = QueueSession(clock, [FakeResponse(200, {"playerId": "p5"})])
+    clients = [OpenFrontClient(session=session) for session in sessions]
+    clients.append(OpenFrontClient(session=fifth_session))
+
+    monkeypatch.setenv("OPENFRONT_MAX_IN_FLIGHT", "4")
+    monkeypatch.setenv("OPENFRONT_SUCCESS_DELAY_SECONDS", "0.1")
+    monkeypatch.setattr(openfront_module, "_utcnow_naive", clock.now)
+    original_sleep = asyncio.sleep
+
+    async def yielding_sleep(delay: float):
+        await clock.sleep(delay)
+        await original_sleep(0)
+
+    monkeypatch.setattr(openfront_module.asyncio, "sleep", yielding_sleep)
+
+    async def run_requests():
+        async def release_once_first_four_started():
+            await asyncio.gather(*(event.wait() for event in started_events))
+            release_first_four.set()
+
+        return await asyncio.gather(
+            release_once_first_four_started(),
+            *(client.fetch_player(f"player-{index}") for index, client in enumerate(clients, start=1)),
+        )
+
+    _release, first, second, third, fourth, fifth = asyncio.run(run_requests())
+
+    assert first["playerId"] == "p1"
+    assert second["playerId"] == "p2"
+    assert third["playerId"] == "p3"
+    assert fourth["playerId"] == "p4"
+    assert fifth["playerId"] == "p5"
+    request_times = sorted(
+        [session.requests[0][2] for session in sessions] + [fifth_session.requests[0][2]]
+    )
+    assert request_times[3] - request_times[0] == timedelta(seconds=0)
+    assert request_times[4] - request_times[3] >= timedelta(seconds=0.1)
+    assert request_times[4] - request_times[3] < timedelta(seconds=0.5)
+
+
+def test_openfront_gate_uses_env_tuned_success_delay(tmp_path, monkeypatch):
+    setup_shared_database(tmp_path)
+    clock = FakeClock(datetime(2026, 3, 14, 0, 0, 0))
+    session_one = QueueSession(clock, [FakeResponse(200, {"playerId": "p1"})])
+    session_two = QueueSession(clock, [FakeResponse(200, {"playerId": "p2"})])
+    client_one = OpenFrontClient(session=session_one)
+    client_two = OpenFrontClient(session=session_two)
+
+    monkeypatch.setenv("OPENFRONT_SUCCESS_DELAY_SECONDS", "0.1")
+    monkeypatch.setattr(openfront_module, "_utcnow_naive", clock.now)
+    monkeypatch.setattr(openfront_module.asyncio, "sleep", clock.sleep)
+
+    first = asyncio.run(client_one.fetch_player("player-1"))
+    second = asyncio.run(client_two.fetch_player("player-2"))
+
+    assert first["playerId"] == "p1"
+    assert second["playerId"] == "p2"
+    assert session_two.requests[0][2] - session_one.requests[0][2] == timedelta(
+        seconds=0.1
+    )
+
+
 def test_fetch_game_emits_rate_limit_event_with_retry_after(tmp_path, monkeypatch):
     setup_shared_database(tmp_path)
     clock = FakeClock(datetime(2026, 3, 14, 0, 0, 0))
@@ -274,3 +349,193 @@ def test_fetch_game_emits_rate_limit_event_with_retry_after(tmp_path, monkeypatc
     assert events[0].status == 429
     assert events[0].cooldown_seconds == 3
     assert events[0].source == "retry-after"
+
+
+def test_fetch_game_uses_minimum_cooldown_when_retry_after_is_zero(
+    tmp_path, monkeypatch
+):
+    setup_shared_database(tmp_path)
+    clock = FakeClock(datetime(2026, 3, 14, 0, 0, 0))
+    session = QueueSession(
+        clock,
+        [
+            FakeResponse(429, {"error": "rate limited"}, {"Retry-After": "0"}),
+            FakeResponse(200, {"info": {"gameID": "g-zero"}}),
+        ],
+    )
+    events = []
+    client = OpenFrontClient(session=session, on_rate_limit=events.append)
+
+    monkeypatch.setenv("OPENFRONT_MIN_RATE_LIMIT_COOLDOWN_SECONDS", "1.0")
+    monkeypatch.setattr(openfront_module, "_utcnow_naive", clock.now)
+    monkeypatch.setattr(openfront_module.asyncio, "sleep", clock.sleep)
+
+    payload = asyncio.run(client.fetch_game("g-zero"))
+
+    assert payload["info"]["gameID"] == "g-zero"
+    assert clock.sleep_calls == [1.0]
+    assert len(session.requests) == 2
+    assert session.requests[1][2] - session.requests[0][2] == timedelta(seconds=1)
+    assert len(events) == 1
+    assert events[0].cooldown_seconds == 1.0
+
+
+def test_fetch_game_can_fail_fast_on_429_for_probe(tmp_path, monkeypatch):
+    setup_shared_database(tmp_path)
+    clock = FakeClock(datetime(2026, 3, 14, 0, 0, 0))
+    session = QueueSession(
+        clock,
+        [
+            FakeResponse(429, {"error": "rate limited"}, {"Retry-After": "60"}),
+            FakeResponse(200, {"info": {"gameID": "g-late"}}),
+        ],
+    )
+    client = OpenFrontClient(session=session)
+
+    monkeypatch.setenv("OPENFRONT_MIN_RATE_LIMIT_COOLDOWN_SECONDS", "1.0")
+    monkeypatch.setattr(openfront_module, "_utcnow_naive", clock.now)
+    monkeypatch.setattr(openfront_module.asyncio, "sleep", clock.sleep)
+
+    with pytest.raises(openfront_module.OpenFrontError) as excinfo:
+        asyncio.run(client.fetch_game("g-rate", retry_on_429=False))
+
+    assert excinfo.value.status == 429
+    assert excinfo.value.retry_after == 60.0
+    assert len(session.requests) == 1
+
+
+def test_openfront_gate_serializes_requests_with_one_in_flight(tmp_path, monkeypatch):
+    setup_shared_database(tmp_path)
+    clock = FakeClock(datetime(2026, 3, 14, 0, 0, 0))
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    session_one = QueueSession(
+        clock,
+        [WaitingResponse(200, {"playerId": "p1"}, first_started, release_first)],
+    )
+    session_two = QueueSession(clock, [FakeResponse(200, {"playerId": "p2"})])
+    client_one = OpenFrontClient(session=session_one)
+    client_two = OpenFrontClient(session=session_two)
+
+    monkeypatch.setenv("OPENFRONT_MAX_IN_FLIGHT", "1")
+    monkeypatch.setenv("OPENFRONT_SUCCESS_DELAY_SECONDS", "0.5")
+    monkeypatch.setattr(openfront_module, "_utcnow_naive", clock.now)
+    original_sleep = asyncio.sleep
+
+    async def yielding_sleep(delay: float):
+        await clock.sleep(delay)
+        await original_sleep(0)
+
+    monkeypatch.setattr(openfront_module.asyncio, "sleep", yielding_sleep)
+
+    async def run_requests():
+        async def release_when_first_started():
+            await first_started.wait()
+            release_first.set()
+
+        return await asyncio.gather(
+            release_when_first_started(),
+            client_one.fetch_player("player-1"),
+            client_two.fetch_player("player-2"),
+        )
+
+    _release, first, second = asyncio.run(run_requests())
+
+    assert first["playerId"] == "p1"
+    assert second["playerId"] == "p2"
+    assert session_two.requests[0][2] - session_one.requests[0][2] >= timedelta(
+        seconds=0.5
+    )
+
+
+def test_openfront_bypass_key_injects_header_and_skips_gate(tmp_path, monkeypatch):
+    setup_shared_database(tmp_path)
+    clock = FakeClock(datetime(2026, 3, 14, 0, 0, 0))
+    first_started = asyncio.Event()
+    second_started = asyncio.Event()
+    release_both = asyncio.Event()
+    session_one = QueueSession(
+        clock,
+        [WaitingResponse(200, {"playerId": "p1"}, first_started, release_both)],
+    )
+    session_two = QueueSession(
+        clock,
+        [WaitingResponse(200, {"playerId": "p2"}, second_started, release_both)],
+    )
+    client_one = OpenFrontClient(
+        session=session_one,
+        bypass_header_name="X-Bypass",
+        bypass_header_value="secret",
+        user_agent="guild-bot/1.0",
+    )
+    client_two = OpenFrontClient(
+        session=session_two,
+        bypass_header_name="X-Bypass",
+        bypass_header_value="secret",
+        user_agent="guild-bot/1.0",
+    )
+
+    monkeypatch.setattr(openfront_module, "_utcnow_naive", clock.now)
+    original_sleep = asyncio.sleep
+
+    async def yielding_sleep(delay: float):
+        await clock.sleep(delay)
+        await original_sleep(0)
+
+    monkeypatch.setattr(openfront_module.asyncio, "sleep", yielding_sleep)
+
+    async def run_requests():
+        async def release_once_started():
+            await asyncio.gather(first_started.wait(), second_started.wait())
+            release_both.set()
+
+        return await asyncio.gather(
+            release_once_started(),
+            client_one.fetch_player("player-1"),
+            client_two.fetch_player("player-2"),
+        )
+
+    _release, first, second = asyncio.run(run_requests())
+
+    assert first["playerId"] == "p1"
+    assert second["playerId"] == "p2"
+    assert session_one.requests[0][3]["headers"] == {
+        "X-Bypass": "secret",
+        "User-Agent": "guild-bot/1.0",
+    }
+    assert session_two.requests[0][3]["headers"] == {
+        "X-Bypass": "secret",
+        "User-Agent": "guild-bot/1.0",
+    }
+    assert session_two.requests[0][2] - session_one.requests[0][2] == timedelta(
+        seconds=0
+    )
+    assert clock.sleep_calls == []
+
+
+def test_openfront_bypass_logs_suspicious_429_and_fails_fast(
+    tmp_path, monkeypatch, caplog
+):
+    setup_shared_database(tmp_path)
+    clock = FakeClock(datetime(2026, 3, 14, 0, 0, 0))
+    session = QueueSession(
+        clock,
+        [FakeResponse(429, {"error": "rate limited"}, {"Retry-After": "60"})],
+    )
+    client = OpenFrontClient(
+        session=session,
+        bypass_header_name="X-Bypass",
+        bypass_header_value="secret",
+        user_agent="guild-bot/1.0",
+    )
+
+    monkeypatch.setattr(openfront_module, "_utcnow_naive", clock.now)
+    monkeypatch.setattr(openfront_module.asyncio, "sleep", clock.sleep)
+
+    with caplog.at_level("WARNING"):
+        with pytest.raises(openfront_module.OpenFrontError) as excinfo:
+            asyncio.run(client.fetch_game("g-rate"))
+
+    assert excinfo.value.status == 429
+    assert len(session.requests) == 1
+    assert any("are you sure about your bypass key?" in r.message for r in caplog.records)

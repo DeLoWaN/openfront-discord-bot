@@ -389,7 +389,11 @@ class CountingBot(commands.Bot):
         intents.guilds = True
         super().__init__(command_prefix="!", intents=intents)
         self.config = config
-        self.client = OpenFrontClient()
+        self.client = (
+            OpenFrontClient(bypass_config=config.openfront)
+            if config.openfront is not None
+            else OpenFrontClient()
+        )
         self.guild_contexts: Dict[int, GuildContext] = {}
         self.guild_data_dir = Path("guild_data")
         self.guild_data_dir.mkdir(parents=True, exist_ok=True)

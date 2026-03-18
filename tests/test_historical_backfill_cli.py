@@ -1,3 +1,5 @@
+import os
+
 from peewee import SqliteDatabase
 
 
@@ -323,6 +325,7 @@ def test_historical_backfill_cli_status_reports_overlap_and_cache_counters(
         requested_end=backfill_cli._parse_cli_datetime("2026-03-03"),
         status="completed_with_failures",
         discovered_count=12,
+        discovery_skipped_known_count=5,
         cached_count=7,
         ingested_count=7,
         matched_count=3,
@@ -341,6 +344,7 @@ def test_historical_backfill_cli_status_reports_overlap_and_cache_counters(
     output = capsys.readouterr().out
 
     assert "status=completed_with_failures" in output
+    assert "discovery_skipped=5" in output
     assert "skipped=4" in output
     assert "replayed=6" in output
     assert "cache_failed=1" in output
@@ -349,3 +353,222 @@ def test_historical_backfill_cli_status_reports_overlap_and_cache_counters(
     assert "openfront_retry_after=2" in output
     assert "openfront_cooldown_total=15.5" in output
     assert "openfront_cooldown_max=9.0" in output
+
+
+def test_historical_backfill_cli_start_uses_safe_openfront_profile_defaults(
+    monkeypatch,
+    tmp_path,
+    capsys,
+):
+    from src.services.guild_sites import provision_guild_site
+
+    backfill_cli = patch_backfill_cli_runtime(monkeypatch, tmp_path)
+    provision_guild_site(
+        slug="north",
+        subdomain="north",
+        display_name="North",
+        clan_tags=["NU"],
+    )
+    seen_profiles = []
+
+    class FakeClient:
+        async def fetch_clan_sessions(self, clan_tag, start=None, end=None):
+            return [{"gameId": "team-1", "gameStart": "2026-03-01T10:00:00Z"}]
+
+        async def fetch_public_games(self, start, end, limit=1000):
+            return []
+
+        async def fetch_game(self, game_id, include_turns=False, retry_on_429=True):
+            seen_profiles.append(
+                (
+                    os.environ.get("OPENFRONT_MAX_IN_FLIGHT"),
+                    os.environ.get("OPENFRONT_SUCCESS_DELAY_SECONDS"),
+                    os.environ.get("OPENFRONT_MIN_RATE_LIMIT_COOLDOWN_SECONDS"),
+                )
+            )
+            return {
+                "info": {
+                    "gameID": game_id,
+                    "config": {"gameType": "Public", "gameMode": "Team"},
+                    "winner": ["team", "Team 1", "c1"],
+                    "players": [
+                        {"clientID": "c1", "username": "[NU] Ace", "clanTag": None}
+                    ],
+                },
+                "turns": [],
+            }
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(backfill_cli, "OpenFrontClient", lambda: FakeClient())
+
+    assert (
+        backfill_cli.main(["start", "--start", "2026-03-01", "--end", "2026-03-03"])
+        == 0
+    )
+    _output = capsys.readouterr().out
+
+    assert seen_profiles
+    assert seen_profiles[0] == ("1", "2.2", "2.2")
+
+
+def test_historical_backfill_cli_resume_accepts_openfront_profile_overrides(
+    monkeypatch,
+    tmp_path,
+    capsys,
+):
+    from src.data.shared.models import BackfillRun
+
+    backfill_cli = patch_backfill_cli_runtime(monkeypatch, tmp_path)
+    run = BackfillRun.create(
+        requested_start=backfill_cli._parse_cli_datetime("2026-03-01"),
+        requested_end=backfill_cli._parse_cli_datetime("2026-03-03"),
+        status="pending",
+    )
+    captured = {}
+
+    async def fake_execute_run(
+        run_id,
+        *,
+        concurrency,
+        refresh_batch_size,
+        progress_every,
+        openfront_max_in_flight,
+        openfront_success_delay_seconds,
+        openfront_min_rate_limit_cooldown_seconds,
+    ):
+        captured.update(
+            run_id=run_id,
+            concurrency=concurrency,
+            refresh_batch_size=refresh_batch_size,
+            progress_every=progress_every,
+            openfront_max_in_flight=openfront_max_in_flight,
+            openfront_success_delay_seconds=openfront_success_delay_seconds,
+            openfront_min_rate_limit_cooldown_seconds=openfront_min_rate_limit_cooldown_seconds,
+        )
+        run.status = "completed"
+        run.save()
+        return run
+
+    monkeypatch.setattr(backfill_cli, "_execute_run", fake_execute_run)
+
+    assert (
+        backfill_cli.main(
+            [
+                "resume",
+                "--run-id",
+                str(run.id),
+                "--openfront-max-in-flight",
+                "2",
+                "--openfront-success-delay-seconds",
+                "1.5",
+                "--openfront-min-rate-limit-cooldown-seconds",
+                "2.0",
+            ]
+        )
+        == 0
+    )
+    _output = capsys.readouterr().out
+
+    assert captured["run_id"] == run.id
+    assert captured["openfront_max_in_flight"] == 2
+    assert captured["openfront_success_delay_seconds"] == 1.5
+    assert captured["openfront_min_rate_limit_cooldown_seconds"] == 2.0
+
+
+def test_historical_backfill_cli_probe_openfront_reports_summary_without_backfill_writes(
+    monkeypatch,
+    tmp_path,
+    capsys,
+):
+    from src.data.shared.models import BackfillGame, BackfillRun, CachedOpenFrontGame
+    from src.services.historical_backfill import OpenFrontProbeSummary
+
+    backfill_cli = patch_backfill_cli_runtime(monkeypatch, tmp_path)
+    captured = {}
+
+    async def fake_probe_openfront_profile(
+        client,
+        *,
+        start,
+        end,
+        sample_size,
+        seed,
+        openfront_max_in_flight,
+        openfront_success_delay_seconds,
+        openfront_min_rate_limit_cooldown_seconds,
+        stop_after_rate_limits,
+        stop_on_retry_after_seconds,
+    ):
+        captured.update(
+            sample_size=sample_size,
+            seed=seed,
+            openfront_max_in_flight=openfront_max_in_flight,
+            openfront_success_delay_seconds=openfront_success_delay_seconds,
+            openfront_min_rate_limit_cooldown_seconds=openfront_min_rate_limit_cooldown_seconds,
+            stop_after_rate_limits=stop_after_rate_limits,
+            stop_on_retry_after_seconds=stop_on_retry_after_seconds,
+        )
+        return OpenFrontProbeSummary(
+            candidate_count=120,
+            sampled_count=25,
+            attempted_count=7,
+            success_count=5,
+            rate_limit_count=2,
+            zero_retry_after_count=1,
+            other_error_count=0,
+            retry_after_max=60.0,
+            retry_after_distribution={"0s": 1, ">=30s": 1},
+            latency_p50_seconds=0.4,
+            latency_p95_seconds=0.8,
+            throughput_per_second=2.5,
+            openfront_max_in_flight=openfront_max_in_flight,
+            openfront_success_delay_seconds=openfront_success_delay_seconds,
+            openfront_min_rate_limit_cooldown_seconds=openfront_min_rate_limit_cooldown_seconds,
+            stopped_early=True,
+            stop_reason="retry_after_ge_30s",
+        )
+
+    class FakeClient:
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(backfill_cli, "OpenFrontClient", lambda: FakeClient())
+    monkeypatch.setattr(backfill_cli, "probe_openfront_profile", fake_probe_openfront_profile)
+
+    assert (
+        backfill_cli.main(
+            [
+                "probe-openfront",
+                "--start",
+                "2026-03-01",
+                "--end",
+                "2026-03-03",
+                "--sample-size",
+                "25",
+                "--seed",
+                "7",
+                "--openfront-max-in-flight",
+                "2",
+                "--openfront-success-delay-seconds",
+                "1.5",
+                "--openfront-min-rate-limit-cooldown-seconds",
+                "2.0",
+            ]
+        )
+        == 0
+    )
+    output = capsys.readouterr().out
+
+    assert "attempted=7" in output
+    assert "rate_limits=2" in output
+    assert "retry_after_distribution=0s:1,>=30s:1" in output
+    assert captured["sample_size"] == 25
+    assert captured["seed"] == 7
+    assert captured["openfront_max_in_flight"] == 2
+    assert captured["openfront_success_delay_seconds"] == 1.5
+    assert captured["openfront_min_rate_limit_cooldown_seconds"] == 2.0
+    assert BackfillRun.select().count() == 0
+    assert BackfillGame.select().count() == 0
+    assert CachedOpenFrontGame.select().count() == 0

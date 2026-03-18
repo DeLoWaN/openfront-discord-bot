@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
+import random
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from peewee import fn
+from peewee import Case, fn
 
 from ..core.openfront import OpenFrontRateLimitEvent
 from ..data.database import shared_database
@@ -57,8 +59,185 @@ class HydrationResult:
     matched_guild_ids: set[int]
 
 
+@dataclass(frozen=True)
+class OpenFrontProbeSummary:
+    candidate_count: int
+    sampled_count: int
+    attempted_count: int
+    success_count: int
+    rate_limit_count: int
+    zero_retry_after_count: int
+    other_error_count: int
+    retry_after_max: float
+    retry_after_distribution: dict[str, int]
+    latency_p50_seconds: float | None
+    latency_p95_seconds: float | None
+    throughput_per_second: float | None
+    openfront_max_in_flight: int
+    openfront_success_delay_seconds: float
+    openfront_min_rate_limit_cooldown_seconds: float
+    stopped_early: bool
+    stop_reason: str | None
+
+
 class CachePayloadError(ValueError):
     pass
+
+
+def _retry_after_bucket(retry_after: float | None) -> str:
+    if retry_after is None:
+        return "missing"
+    if retry_after <= 0:
+        return "0s"
+    if retry_after < 1:
+        return "0-1s"
+    if retry_after < 30:
+        return "1-30s"
+    return ">=30s"
+
+
+def _percentile(values: list[float], percentile: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    index = max(0, math.ceil(percentile * len(ordered)) - 1)
+    return ordered[min(index, len(ordered) - 1)]
+
+
+def _candidate_public_game_ids(games: list[dict[str, object]]) -> list[str]:
+    candidate_ids: list[str] = []
+    seen_game_ids: set[str] = set()
+    for game in games:
+        game_id = str(game.get("game") or "").strip()
+        if not game_id or game_id in seen_game_ids:
+            continue
+        seen_game_ids.add(game_id)
+        candidate_ids.append(game_id)
+    return candidate_ids
+
+
+async def probe_openfront_profile(
+    client: object,
+    *,
+    start: datetime,
+    end: datetime,
+    sample_size: int,
+    openfront_max_in_flight: int,
+    openfront_success_delay_seconds: float,
+    openfront_min_rate_limit_cooldown_seconds: float,
+    seed: int | None = None,
+    stop_after_rate_limits: int = 3,
+    stop_on_retry_after_seconds: float = 30.0,
+) -> OpenFrontProbeSummary:
+    candidate_ids = _candidate_public_game_ids(
+        list(await client.fetch_public_games(start, end))
+    )
+    sampled_count = min(max(sample_size, 0), len(candidate_ids))
+    if seed is None or sampled_count >= len(candidate_ids):
+        sampled_ids = candidate_ids[:sampled_count]
+    else:
+        sampled_ids = random.Random(seed).sample(candidate_ids, sampled_count)
+
+    queue: asyncio.Queue[str] = asyncio.Queue()
+    for game_id in sampled_ids:
+        queue.put_nowait(game_id)
+
+    attempted_count = 0
+    success_count = 0
+    rate_limit_count = 0
+    zero_retry_after_count = 0
+    other_error_count = 0
+    retry_after_max = 0.0
+    retry_after_distribution: dict[str, int] = {}
+    latencies: list[float] = []
+    stopped_early = False
+    stop_reason: str | None = None
+    stop_event = asyncio.Event()
+    metrics_lock = asyncio.Lock()
+
+    async def worker() -> None:
+        nonlocal attempted_count
+        nonlocal success_count
+        nonlocal rate_limit_count
+        nonlocal zero_retry_after_count
+        nonlocal other_error_count
+        nonlocal retry_after_max
+        nonlocal stopped_early
+        nonlocal stop_reason
+
+        while not stop_event.is_set():
+            try:
+                game_id = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            started_at = asyncio.get_running_loop().time()
+            try:
+                async with metrics_lock:
+                    attempted_count += 1
+                await client.fetch_game(
+                    game_id,
+                    include_turns=False,
+                    retry_on_429=False,
+                )
+                latency = asyncio.get_running_loop().time() - started_at
+                async with metrics_lock:
+                    success_count += 1
+                    latencies.append(latency)
+            except Exception as exc:
+                status = getattr(exc, "status", None)
+                retry_after = getattr(exc, "retry_after", None)
+                if status == 429:
+                    retry_after_value = float(retry_after or 0.0)
+                    async with metrics_lock:
+                        rate_limit_count += 1
+                        if retry_after_value == 0.0:
+                            zero_retry_after_count += 1
+                        retry_after_max = max(retry_after_max, retry_after_value)
+                        bucket = _retry_after_bucket(retry_after)
+                        retry_after_distribution[bucket] = (
+                            retry_after_distribution.get(bucket, 0) + 1
+                        )
+                        if retry_after_value >= stop_on_retry_after_seconds:
+                            stopped_early = True
+                            stop_reason = "retry_after_ge_30s"
+                            stop_event.set()
+                        elif rate_limit_count >= stop_after_rate_limits:
+                            stopped_early = True
+                            stop_reason = "rate_limit_threshold"
+                            stop_event.set()
+                else:
+                    async with metrics_lock:
+                        other_error_count += 1
+            finally:
+                queue.task_done()
+
+    started_probe_at = asyncio.get_running_loop().time()
+    workers = [
+        asyncio.create_task(worker())
+        for _ in range(max(1, openfront_max_in_flight))
+    ]
+    await asyncio.gather(*workers)
+    elapsed = asyncio.get_running_loop().time() - started_probe_at
+
+    return OpenFrontProbeSummary(
+        candidate_count=len(candidate_ids),
+        sampled_count=len(sampled_ids),
+        attempted_count=attempted_count,
+        success_count=success_count,
+        rate_limit_count=rate_limit_count,
+        zero_retry_after_count=zero_retry_after_count,
+        other_error_count=other_error_count,
+        retry_after_max=retry_after_max,
+        retry_after_distribution=retry_after_distribution,
+        latency_p50_seconds=_percentile(latencies, 0.50),
+        latency_p95_seconds=_percentile(latencies, 0.95),
+        throughput_per_second=(success_count / elapsed) if elapsed > 0 else None,
+        openfront_max_in_flight=openfront_max_in_flight,
+        openfront_success_delay_seconds=openfront_success_delay_seconds,
+        openfront_min_rate_limit_cooldown_seconds=openfront_min_rate_limit_cooldown_seconds,
+        stopped_early=stopped_early,
+        stop_reason=stop_reason,
+    )
 
 
 def _parse_api_datetime(value: str | None) -> datetime | None:
@@ -171,9 +350,16 @@ def _record_openfront_rate_limit(
             openfront_cooldown_seconds_total=(
                 BackfillRun.openfront_cooldown_seconds_total + event.cooldown_seconds
             ),
-            openfront_cooldown_seconds_max=fn.MAX(
+            openfront_cooldown_seconds_max=Case(
+                None,
+                (
+                    (
+                        BackfillRun.openfront_cooldown_seconds_max
+                        < event.cooldown_seconds,
+                        event.cooldown_seconds,
+                    ),
+                ),
                 BackfillRun.openfront_cooldown_seconds_max,
-                event.cooldown_seconds,
             ),
         )
         .where(BackfillRun.id == run_id)
@@ -263,6 +449,14 @@ def _lookup_cache_entry(backfill_game: BackfillGame) -> CachedOpenFrontGame | No
     return cache_entry
 
 
+def _lookup_cache_entry_by_game_id(
+    openfront_game_id: str,
+) -> CachedOpenFrontGame | None:
+    return CachedOpenFrontGame.get_or_none(
+        CachedOpenFrontGame.openfront_game_id == openfront_game_id
+    )
+
+
 def reset_ingested_web_data() -> IngestedWebDataResetSummary:
     with shared_database.atomic():
         game_participants = GameParticipant.delete().execute()
@@ -288,6 +482,13 @@ def _get_payload_from_cache(
     backfill_game: BackfillGame,
 ) -> tuple[CachedOpenFrontGame | None, dict[str, object] | None]:
     cache_entry = _lookup_cache_entry(backfill_game)
+    return _load_payload_from_cache_entry(cache_entry, backfill_game.openfront_game_id)
+
+
+def _load_payload_from_cache_entry(
+    cache_entry: CachedOpenFrontGame | None,
+    openfront_game_id: str,
+) -> tuple[CachedOpenFrontGame | None, dict[str, object] | None]:
     if cache_entry is None:
         return None, None
     try:
@@ -296,7 +497,7 @@ def _get_payload_from_cache(
         return cache_entry, json.loads(cache_entry.payload_json)
     except (TypeError, ValueError) as exc:
         raise CachePayloadError(
-            f"Unreadable cached payload for {backfill_game.openfront_game_id}: {exc}"
+            f"Unreadable cached payload for {openfront_game_id}: {exc}"
         ) from exc
 
 
@@ -322,7 +523,14 @@ def _record_skipped_known(run: BackfillRun, backfill_game: BackfillGame) -> None
     backfill_game.status = "skipped_known"
     backfill_game.last_error = None
     backfill_game.matched_guild_count = 0
-    backfill_game.save()
+    backfill_game.save(
+        only=[
+            BackfillGame.status,
+            BackfillGame.last_error,
+            BackfillGame.matched_guild_count,
+            BackfillGame.updated_at,
+        ]
+    )
 
 
 def _record_failure(
@@ -342,7 +550,15 @@ def _record_failure(
     backfill_game.status = next_status
     backfill_game.last_error = error
     backfill_game.matched_guild_count = 0
-    backfill_game.save()
+    backfill_game.save(
+        only=[
+            BackfillGame.attempts,
+            BackfillGame.status,
+            BackfillGame.last_error,
+            BackfillGame.matched_guild_count,
+            BackfillGame.updated_at,
+        ]
+    )
 
 
 def _record_success(
@@ -358,7 +574,16 @@ def _record_success(
     backfill_game.status = "completed"
     backfill_game.last_error = None
     backfill_game.matched_guild_count = len(matched_guild_ids)
-    backfill_game.save()
+    backfill_game.save(
+        only=[
+            BackfillGame.attempts,
+            BackfillGame.cache_entry,
+            BackfillGame.status,
+            BackfillGame.last_error,
+            BackfillGame.matched_guild_count,
+            BackfillGame.updated_at,
+        ]
+    )
     run.cached_count += 1
     run.ingested_count += 1
     if matched_guild_ids:
@@ -368,25 +593,76 @@ def _record_success(
 
 
 def _has_prior_successful_hydration(backfill_game: BackfillGame) -> bool:
-    return (
-        BackfillGame.select()
-        .where(
-            (BackfillGame.openfront_game_id == backfill_game.openfront_game_id)
-            & (BackfillGame.run != backfill_game.run)
-            & (BackfillGame.status == "completed")
+    return _has_prior_successful_hydration_for_game(
+        backfill_game.openfront_game_id,
+        excluding_run=backfill_game.run,
+    )
+
+
+def _has_prior_successful_hydration_for_game(
+    openfront_game_id: str,
+    *,
+    excluding_run: BackfillRun | None = None,
+) -> bool:
+    query = BackfillGame.select().where(
+        (BackfillGame.openfront_game_id == openfront_game_id)
+        & (BackfillGame.status == "completed")
+    )
+    if excluding_run is not None:
+        query = query.where(BackfillGame.run != excluding_run)
+    return query.exists()
+
+
+def _should_skip_known_history_for_game(
+    openfront_game_id: str,
+    *,
+    excluding_run: BackfillRun | None = None,
+) -> bool:
+    if not _has_prior_successful_hydration_for_game(
+        openfront_game_id,
+        excluding_run=excluding_run,
+    ):
+        return False
+    cache_entry = _lookup_cache_entry_by_game_id(openfront_game_id)
+    try:
+        cache_entry, payload = _load_payload_from_cache_entry(
+            cache_entry,
+            openfront_game_id,
         )
-        .exists()
+    except CachePayloadError:
+        return False
+    return cache_entry is not None and payload is not None
+
+
+def _increment_run_discovery_skip_count(run_id: int, count: int) -> None:
+    if count <= 0:
+        return
+    (
+        BackfillRun.update(
+            discovery_skipped_known_count=(
+                BackfillRun.discovery_skipped_known_count + count
+            )
+        )
+        .where(BackfillRun.id == run_id)
+        .execute()
+    )
+
+
+def _increment_run_discovered_count(run_id: int, count: int) -> None:
+    if count <= 0:
+        return
+    (
+        BackfillRun.update(discovered_count=BackfillRun.discovered_count + count)
+        .where(BackfillRun.id == run_id)
+        .execute()
     )
 
 
 def _should_skip_known_history(backfill_game: BackfillGame) -> bool:
-    if not _has_prior_successful_hydration(backfill_game):
-        return False
-    try:
-        cache_entry, payload = _get_payload_from_cache(backfill_game)
-    except CachePayloadError:
-        return False
-    return cache_entry is not None and payload is not None
+    return _should_skip_known_history_for_game(
+        backfill_game.openfront_game_id,
+        excluding_run=backfill_game.run,
+    )
 
 
 def _finalize_run(run: BackfillRun) -> None:
@@ -456,9 +732,10 @@ async def _discover_team_cursor_games(
     cursor_id: int,
     *,
     window_size: timedelta,
-) -> int:
+) -> tuple[int, int]:
     cursor = BackfillCursor.get_by_id(cursor_id)
     discovered_count = 0
+    discovery_skipped_count = 0
     window_start = cursor.next_started_at or run.requested_start
     while window_start <= run.requested_end:
         window_end = _cursor_window_end(
@@ -485,6 +762,9 @@ async def _discover_team_cursor_games(
             started_at = _parse_api_datetime(session.get("gameStart"))
             if not _in_start_range(started_at, run.requested_start, run.requested_end):
                 continue
+            if _should_skip_known_history_for_game(game_id, excluding_run=run):
+                discovery_skipped_count += 1
+                continue
             if _queue_game(
                 run,
                 openfront_game_id=game_id,
@@ -501,7 +781,7 @@ async def _discover_team_cursor_games(
         if cursor.status == "completed":
             break
         window_start = cursor.next_started_at or run.requested_start
-    return discovered_count
+    return discovered_count, discovery_skipped_count
 
 
 async def discover_team_games(
@@ -523,7 +803,7 @@ async def discover_team_games(
     )
     semaphore = asyncio.Semaphore(max(1, concurrency))
 
-    async def discover_cursor(cursor_id: int) -> int:
+    async def discover_cursor(cursor_id: int) -> tuple[int, int]:
         async with semaphore:
             return await _discover_team_cursor_games(
                 client,
@@ -532,18 +812,17 @@ async def discover_team_games(
                 window_size=window_size,
             )
 
-    discovered_count = sum(
-        await asyncio.gather(*(discover_cursor(cursor.id) for cursor in cursors))
+    results = await asyncio.gather(*(discover_cursor(cursor.id) for cursor in cursors))
+    discovered_count = sum(discovered for discovered, _skipped in results)
+    discovery_skipped_count = sum(skipped for _discovered, skipped in results)
+    _increment_run_discovered_count(run.id, discovered_count)
+    _increment_run_discovery_skip_count(run.id, discovery_skipped_count)
+    LOGGER.info(
+        "run=%s source=team discovered=%s discovery_skipped=%s",
+        run.id,
+        discovered_count,
+        discovery_skipped_count,
     )
-    if discovered_count:
-        (
-            BackfillRun.update(
-                discovered_count=BackfillRun.discovered_count + discovered_count
-            )
-            .where(BackfillRun.id == run.id)
-            .execute()
-        )
-    LOGGER.info("run=%s source=team discovered=%s", run.id, discovered_count)
     return discovered_count
 
 
@@ -558,6 +837,7 @@ async def discover_ffa_games(
         (BackfillCursor.run == run) & (BackfillCursor.source_type == "ffa")
     )
     discovered_count = 0
+    discovery_skipped_count = 0
     window_start = cursor.next_started_at or run.requested_start
     while window_start <= run.requested_end and cursor.status != "completed":
         window_end = _cursor_window_end(
@@ -582,6 +862,9 @@ async def discover_ffa_games(
             started_at = _parse_api_datetime(game.get("start"))
             if not _in_start_range(started_at, run.requested_start, run.requested_end):
                 continue
+            if _should_skip_known_history_for_game(game_id, excluding_run=run):
+                discovery_skipped_count += 1
+                continue
             if _queue_game(
                 run,
                 openfront_game_id=game_id,
@@ -598,15 +881,14 @@ async def discover_ffa_games(
         if cursor.status == "completed":
             break
         window_start = cursor.next_started_at or run.requested_start
-    if discovered_count:
-        (
-            BackfillRun.update(
-                discovered_count=BackfillRun.discovered_count + discovered_count
-            )
-            .where(BackfillRun.id == run.id)
-            .execute()
-        )
-    LOGGER.info("run=%s source=ffa discovered=%s", run.id, discovered_count)
+    _increment_run_discovered_count(run.id, discovered_count)
+    _increment_run_discovery_skip_count(run.id, discovery_skipped_count)
+    LOGGER.info(
+        "run=%s source=ffa discovered=%s discovery_skipped=%s",
+        run.id,
+        discovered_count,
+        discovery_skipped_count,
+    )
     return discovered_count
 
 
@@ -635,14 +917,12 @@ async def hydrate_backfill_run(
     )
     semaphore = asyncio.Semaphore(max(1, concurrency))
 
-    async def process_game(game_id: int):
+    async def process_game(backfill_game: BackfillGame):
         async with semaphore:
-            backfill_game = BackfillGame.get_by_id(game_id)
             if _should_skip_known_history(backfill_game):
                 _record_skipped_known(run, backfill_game)
                 return HydrationResult("skipped_known", set())
             backfill_game.attempts += 1
-            backfill_game.save()
             try:
                 cache_entry, payload = _get_payload_from_cache(backfill_game)
             except CachePayloadError as exc:
@@ -679,7 +959,7 @@ async def hydrate_backfill_run(
         for offset in range(0, len(pending_games), batch_size):
             batch = pending_games[offset : offset + batch_size]
             results = await asyncio.gather(
-                *(process_game(game.id) for game in batch),
+                *(process_game(game) for game in batch),
                 return_exceptions=True,
             )
             for backfill_game, result in zip(batch, results):
@@ -700,22 +980,17 @@ async def hydrate_backfill_run(
                 if result.matched_guild_ids:
                     affected_guild_ids.update(result.matched_guild_ids)
                 processed_successes += 1
-                if (
-                    processed_successes % max(1, refresh_batch_size) == 0
-                    and affected_guild_ids
-                ):
-                    run.refreshed_guild_count += _refresh_guild_batch(affected_guild_ids)
-                    affected_guild_ids.clear()
             _sync_run_rate_limit_counters(run)
             run.save()
             LOGGER.info(
-                "run=%s hydration_progress processed=%s total=%s cached=%s ingested=%s matched=%s skipped=%s failed=%s cache_failed=%s aggregate_refreshes=%s openfront_rate_limits=%s openfront_retry_after=%s openfront_cooldown_total=%s openfront_cooldown_max=%s",
+                "run=%s hydration_progress processed=%s total=%s cached=%s ingested=%s matched=%s discovery_skipped=%s skipped=%s failed=%s cache_failed=%s aggregate_refreshes=%s openfront_rate_limits=%s openfront_retry_after=%s openfront_cooldown_total=%s openfront_cooldown_max=%s",
                 run.id,
                 min(offset + len(batch), len(pending_games)),
                 len(pending_games),
                 run.cached_count,
                 run.ingested_count,
                 run.matched_count,
+                run.discovery_skipped_known_count,
                 run.skipped_known_count,
                 run.failed_count,
                 run.cache_failure_count,
@@ -730,12 +1005,13 @@ async def hydrate_backfill_run(
             run.refreshed_guild_count += _refresh_guild_batch(affected_guild_ids)
         _finalize_run(run)
         LOGGER.info(
-            "run=%s hydration_complete status=%s cached=%s ingested=%s matched=%s skipped=%s failed=%s cache_failed=%s aggregate_refreshes=%s openfront_rate_limits=%s openfront_retry_after=%s openfront_cooldown_total=%s openfront_cooldown_max=%s",
+            "run=%s hydration_complete status=%s cached=%s ingested=%s matched=%s discovery_skipped=%s skipped=%s failed=%s cache_failed=%s aggregate_refreshes=%s openfront_rate_limits=%s openfront_retry_after=%s openfront_cooldown_total=%s openfront_cooldown_max=%s",
             run.id,
             run.status,
             run.cached_count,
             run.ingested_count,
             run.matched_count,
+            run.discovery_skipped_known_count,
             run.skipped_known_count,
             run.failed_count,
             run.cache_failure_count,

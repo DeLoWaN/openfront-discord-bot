@@ -16,3 +16,7 @@ discord_oauth:
   redirect_uri: "https://guild.example.com/auth/discord/callback"
   session_secret: "replace-with-a-long-random-secret"
   scope: "identify"
+openfront:
+  bypass_header_name: "" # Optional header name to bypass OpenFront rate limits
+  bypass_header_value: "" # Optional header value paired with bypass_header_name
+  user_agent: "" # Optional User-Agent to send on every OpenFront API request

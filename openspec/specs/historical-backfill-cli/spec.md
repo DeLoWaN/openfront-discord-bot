@@ -1,8 +1,12 @@
 # historical-backfill-cli Specification
 
 ## Purpose
-TBD - created by archiving change add-resumable-hybrid-backfill. Update Purpose after archive.
+
+TBD - created by archiving change add-resumable-hybrid-backfill. Update
+Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Start historical backfill runs from an external CLI
 
 The system SHALL provide an external CLI command that starts a historical
@@ -10,7 +14,9 @@ backfill run by accepting the requested date range and creating a durable run
 record for the hybrid discovery-and-hydration pipeline. Ordinary `start`
 behavior SHALL skip games that were already hydrated successfully in earlier
 runs when their cached payloads remain readable, and it SHALL reserve all
-reparsing of known history for explicit replay.
+reparsing of known history for explicit replay. The `start` command SHALL also
+accept explicit OpenFront throttling controls for backfill hydration and SHALL
+default to a non-bursty safe profile when no overrides are provided.
 
 #### Scenario: Operator starts a new historical backfill
 
@@ -31,27 +37,33 @@ reparsing of known history for explicit replay.
 - **WHEN** an operator provides a backfill range whose end precedes its start
 - **THEN** the CLI fails instead of creating a run
 
+#### Scenario: Operator starts with no explicit OpenFront tuning
+
+- **WHEN** an operator starts a backfill without passing any OpenFront
+  throttling overrides
+- **THEN** the CLI uses its safe default OpenFront profile instead of a hidden
+  aggressive burst profile
+
 ### Requirement: Inspect historical backfill progress from an external CLI
 
 The system SHALL provide an external CLI command that shows the persisted
 status of a historical backfill run, including run identity, lifecycle state,
 progress counters, and current cursor or window position. The displayed status
-SHALL distinguish clean completion, completion with failures, overlap skips,
-explicit replay work, cache-integrity failures, and upstream cooldown
-statistics observed during the run.
+SHALL distinguish clean completion, completion with failures, overlap skipped
+during discovery, overlap skipped during hydration compatibility checks,
+explicit replay work, and cache-integrity failures.
 
 #### Scenario: Operator inspects an active run
 
 - **WHEN** an operator requests status for a running historical backfill
-- **THEN** the CLI displays the latest persisted progress, cursor state, and
-  upstream cooldown counters
+- **THEN** the CLI displays the latest persisted progress and cursor state
 
-#### Scenario: Operator inspects a throttled run
+#### Scenario: Operator inspects a run with skipped history
 
-- **WHEN** an operator requests status for a run that encountered upstream
-  cooldowns
-- **THEN** the CLI shows the count and duration of those cooldowns separately
-  from replay work and failures
+- **WHEN** an operator requests status for a run that skipped already known
+  history
+- **THEN** the CLI shows discovery-phase overlap skips separately from replay
+  work and failures
 
 #### Scenario: Operator inspects an unknown run
 
@@ -65,7 +77,8 @@ paused historical backfill run from its persisted state instead of restarting
 from the beginning. Ordinary `resume` behavior SHALL skip overlap with games
 that were already hydrated successfully in earlier runs when their cached
 payloads remain readable, and it SHALL reserve full reprocessing for explicit
-replay.
+replay. The `resume` command SHALL accept the same explicit OpenFront
+throttling controls as `start`.
 
 #### Scenario: Operator resumes an interrupted run
 
@@ -86,6 +99,30 @@ replay.
 - **WHEN** an operator attempts to resume a historical backfill run that is
   already complete and has no resumable work
 - **THEN** the CLI reports that no resumable work remains
+
+### Requirement: Probe OpenFront fetch behavior from an external CLI
+
+The system SHALL provide an external CLI command that probes OpenFront fetch
+behavior over a bounded historical sample without creating backfill runs,
+cached payloads, or ingested observations. The probe SHALL discover candidate
+public game ids in the requested window, sample a bounded subset, fetch
+`/public/game/{id}?turns=false` for calibration, report operator-readable
+latency and rate-limit metrics, and stop early when the selected profile is
+clearly too aggressive.
+
+#### Scenario: Operator probes a safe profile
+
+- **WHEN** an operator runs the probe command over a bounded time window
+- **THEN** the CLI reports sampled request count, success count, rate-limit
+  count, retry-after distribution, latency percentiles, throughput, and the
+  OpenFront profile used
+
+#### Scenario: Probe encounters a long upstream cooldown
+
+- **WHEN** a probe request receives a `429` whose retry-after value indicates a
+  large cooldown
+- **THEN** the probe records that result and stops early instead of continuing
+  the remaining sample
 
 ### Requirement: Replay cached historical payloads from an external CLI
 
@@ -112,4 +149,3 @@ failures instead of silently fetching new data.
 - **WHEN** an operator requests replay for a historical range or run with no
   cached game payloads
 - **THEN** the CLI fails instead of silently performing a new crawl
-

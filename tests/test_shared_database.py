@@ -1,6 +1,6 @@
 from textwrap import dedent
 
-from src.core.config import MariaDBConfig, load_config
+from src.core.config import MariaDBConfig, OpenFrontBypassConfig, load_config
 
 
 def test_load_config_reads_optional_mariadb_settings(tmp_path):
@@ -68,3 +68,29 @@ def test_build_and_init_shared_mariadb_database():
         assert database.connect_params[key] == value
     assert initialized.database == "guild_stats"
     assert getattr(shared_database, "obj", None) is initialized
+
+
+def test_load_config_reads_optional_openfront_bypass_settings(tmp_path):
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(
+        dedent(
+            """
+            token: "token"
+            central_database_path: "central.db"
+            openfront:
+              bypass_header_name: "X-OpenFront-Bypass"
+              bypass_header_value: "secret-key"
+              user_agent: "guild-bot/1.0"
+            """
+        ).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    config = load_config(str(config_path))
+
+    assert config.openfront == OpenFrontBypassConfig(
+        bypass_header_name="X-OpenFront-Bypass",
+        bypass_header_value="secret-key",
+        user_agent="guild-bot/1.0",
+    )

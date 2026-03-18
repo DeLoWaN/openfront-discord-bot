@@ -202,6 +202,49 @@ def test_ingest_game_payload_refreshes_leaderboard_aggregates_immediately(tmp_pa
     assert rows[0]["win_count"] == 1
 
 
+def test_ingest_game_payload_skips_rewriting_equivalent_observed_game_and_participants(
+    tmp_path,
+):
+    from src.data.shared.models import GameParticipant, ObservedGame
+    from src.services.guild_sites import provision_guild_site
+    from src.services.openfront_ingestion import ingest_game_payload
+
+    setup_shared_database(tmp_path)
+    provision_guild_site(
+        slug="north",
+        subdomain="north",
+        display_name="North",
+        clan_tags=["NU"],
+    )
+
+    payload = {
+        "info": {
+            "gameID": "stable-game",
+            "config": {"gameType": "Public", "gameMode": "Team"},
+            "winner": ["team", "Team 1", "c1"],
+            "players": [
+                {"clientID": "c1", "username": "[NU] Ace", "clanTag": None},
+            ],
+        }
+    }
+
+    first = ingest_game_payload(payload, refresh_aggregates=False)
+    observed_before = ObservedGame.get(ObservedGame.openfront_game_id == "stable-game")
+    participant_before = GameParticipant.get(GameParticipant.game == observed_before)
+    observed_updated_at_before = observed_before.updated_at
+    participant_updated_at_before = participant_before.updated_at
+
+    second = ingest_game_payload(payload, refresh_aggregates=False)
+    observed_after = ObservedGame.get(ObservedGame.openfront_game_id == "stable-game")
+    participant_after = GameParticipant.get(GameParticipant.game == observed_after)
+
+    assert first.matched_guild_ids == second.matched_guild_ids
+    assert observed_after.id == observed_before.id
+    assert participant_after.id == participant_before.id
+    assert observed_after.updated_at == observed_updated_at_before
+    assert participant_after.updated_at == participant_updated_at_before
+
+
 def test_backfill_public_games_fetches_and_ingests_matching_games(tmp_path):
     from src.data.shared.models import GameParticipant, ObservedGame
     from src.services.guild_sites import provision_guild_site
@@ -305,6 +348,66 @@ def test_refresh_guild_player_aggregates_merges_tracked_tag_variants_only(
     assert merged.win_count == 1
     assert untracked.display_username == "[XYZ] Temujin"
     assert untracked.game_count == 1
+
+
+def test_refresh_guild_player_aggregates_tolerates_conflicting_reinsert(
+    tmp_path,
+    monkeypatch,
+):
+    from src.data.shared.models import GuildPlayerAggregate
+    from src.services.guild_sites import provision_guild_site
+    from src.services.openfront_ingestion import (
+        ingest_game_payload,
+        refresh_guild_player_aggregates,
+    )
+
+    setup_shared_database(tmp_path)
+    guild = provision_guild_site(
+        slug="north",
+        subdomain="north",
+        display_name="North",
+        clan_tags=["NU"],
+    )
+
+    ingest_game_payload(
+        {
+            "info": {
+                "gameID": "race-1",
+                "config": {"gameType": "Public", "gameMode": "Free For All"},
+                "winner": ["player", "c1"],
+                "players": [
+                    {"clientID": "c1", "username": "[NU] FakingIt", "clanTag": "NU"},
+                ],
+            }
+        }
+    )
+
+    original_create = GuildPlayerAggregate.create
+    injected = {"done": False}
+
+    def racing_create(*args, **kwargs):
+        if not injected["done"]:
+            injected["done"] = True
+            original_create(
+                guild=guild,
+                normalized_username="fakingit",
+                display_username="FakingIt",
+                win_count=99,
+                game_count=99,
+            )
+        return original_create(*args, **kwargs)
+
+    monkeypatch.setattr(GuildPlayerAggregate, "create", racing_create)
+
+    aggregates = refresh_guild_player_aggregates(guild)
+
+    assert len(aggregates) == 1
+    aggregate = GuildPlayerAggregate.get(
+        (GuildPlayerAggregate.guild == guild)
+        & (GuildPlayerAggregate.normalized_username == "fakingit")
+    )
+    assert aggregate.win_count == 1
+    assert aggregate.game_count == 1
 
 
 def test_refresh_guild_player_aggregates_rewards_high_participation_over_tiny_perfect_samples(

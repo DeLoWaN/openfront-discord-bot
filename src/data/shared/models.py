@@ -113,6 +113,7 @@ class BackfillRun(SharedBaseModel):
     completed_at = DateTimeField(null=True)
     last_error = TextField(null=True)
     discovered_count = IntegerField(default=0)
+    discovery_skipped_known_count = IntegerField(default=0)
     cached_count = IntegerField(default=0)
     ingested_count = IntegerField(default=0)
     matched_count = IntegerField(default=0)
