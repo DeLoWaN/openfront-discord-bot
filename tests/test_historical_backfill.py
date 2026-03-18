@@ -646,6 +646,95 @@ def test_hydrate_backfill_run_skips_games_completed_in_earlier_runs(tmp_path):
     assert queued.status == "skipped_known"
 
 
+def test_hydrate_backfill_run_refreshes_guilds_for_skipped_known_games(tmp_path, monkeypatch):
+    from src.data.shared.models import (
+        BackfillGame,
+        CachedOpenFrontGame,
+        GameParticipant,
+        ObservedGame,
+    )
+    from src.services import historical_backfill
+    from src.services.guild_sites import provision_guild_site
+
+    setup_shared_database(tmp_path)
+    guild = provision_guild_site(
+        slug="north",
+        subdomain="north",
+        display_name="North",
+        clan_tags=["NU"],
+    )
+    observed = ObservedGame.create(
+        openfront_game_id="known-game",
+        game_type="PUBLIC",
+        mode_name="Team",
+    )
+    GameParticipant.create(
+        game=observed,
+        guild=guild,
+        raw_username="[NU] Ace",
+        normalized_username="ace",
+        raw_clan_tag="NU",
+        effective_clan_tag="NU",
+        clan_tag_source="api",
+        client_id="c1",
+        did_win=1,
+    )
+
+    previous_run = historical_backfill.create_backfill_run(
+        start=datetime(2026, 3, 1),
+        end=datetime(2026, 3, 5),
+    )
+    cache = CachedOpenFrontGame.create(
+        openfront_game_id="known-game",
+        game_type="PUBLIC",
+        mode_name="Team",
+        payload_json='{"info":{"gameID":"known-game","config":{"gameType":"Public","gameMode":"Team"},"winner":["team","Team 1","c1"],"players":[{"clientID":"c1","username":"[NU] Ace","clanTag":"NU"}]}}',
+        turn_payload_json='{"info":{"gameID":"known-game","config":{"gameType":"Public","gameMode":"Team"},"winner":["team","Team 1","c1"],"players":[{"clientID":"c1","username":"[NU] Ace","clanTag":"NU"}]},"turns":[]}',
+    )
+    BackfillGame.create(
+        run=previous_run,
+        openfront_game_id="known-game",
+        source_type="team",
+        status="completed",
+        cache_entry=cache,
+    )
+    current_run = historical_backfill.create_backfill_run(
+        start=datetime(2026, 3, 1),
+        end=datetime(2026, 3, 5),
+    )
+    queued = BackfillGame.create(
+        run=current_run,
+        openfront_game_id="known-game",
+        source_type="team",
+        status="pending",
+    )
+
+    refreshed = []
+
+    def fake_refresh(guild_id):
+        refreshed.append(guild_id)
+        return []
+
+    monkeypatch.setattr(
+        historical_backfill,
+        "refresh_guild_player_aggregates",
+        fake_refresh,
+    )
+
+    class FakeClient:
+        async def fetch_game(self, game_id):
+            raise AssertionError(f"should not fetch {game_id}")
+
+    hydrated = asyncio.run(historical_backfill.hydrate_backfill_run(FakeClient(), current_run.id))
+    queued = BackfillGame.get_by_id(queued.id)
+
+    assert hydrated.status == "completed"
+    assert hydrated.ingested_count == 0
+    assert hydrated.skipped_known_count == 1
+    assert queued.status == "skipped_known"
+    assert refreshed == [guild.id]
+
+
 def test_hydrate_backfill_run_repairs_invalid_cached_payloads(tmp_path):
     from src.data.shared.models import BackfillGame, CachedOpenFrontGame
     from src.services.guild_sites import provision_guild_site

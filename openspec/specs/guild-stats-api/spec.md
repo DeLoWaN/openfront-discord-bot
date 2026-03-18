@@ -13,11 +13,29 @@ the `team`, `ffa`, and `support` views. Each leaderboard response SHALL
 include sortable column metadata, explicit sort state, `ratio`, `win_rate`,
 and recent-activity fields suitable for fully sortable public tables.
 
+For published Team and FFA rows, the API SHALL only expose mathematically valid
+competitive stats. A returned row SHALL NOT expose more wins than games, a
+recent-game count greater than the corresponding mode game count, or a win
+rate outside the inclusive range `0..1`.
+
 #### Scenario: Client requests Team leaderboard data
 
 - **WHEN** a client requests the `team` leaderboard view for a guild
 - **THEN** the response contains Team rows, explicit column metadata, and the
   values required for ascending or descending client-side sorting
+
+#### Scenario: Client requests FFA leaderboard data
+
+- **WHEN** a client requests the `ffa` leaderboard view for a guild
+- **THEN** the response contains only rows whose public FFA wins, games, ratio,
+  recent-game count, and win rate are internally valid
+
+#### Scenario: Stored aggregate row is invalid for a public leaderboard
+
+- **WHEN** the API reads a stored aggregate row whose public Team or FFA stats
+  would violate leaderboard math invariants
+- **THEN** the API does not serialize that row as a valid public leaderboard
+  entry
 
 ### Requirement: Expose guild player profile API data
 
@@ -29,6 +47,9 @@ explicit score-note semantics, recent-activity metadata, the full badge
 catalog state, lightweight weekly summary data, best-partner summaries, and
 roster summaries suitable for the public profile. The response SHALL NOT
 expose an `overall` profile section.
+
+When the API publishes Team or FFA profile data, the section SHALL obey the
+same public math invariants as the corresponding leaderboard view.
 
 #### Scenario: Client requests observed player profile data
 
@@ -42,6 +63,12 @@ expose an `overall` profile section.
 - **THEN** the response contains the guild-scoped competitive sections, full
   badge state, partner and roster summary data, plus any linked-only sections
   already supported for that player
+
+#### Scenario: Client requests player profile with valid Team data
+
+- **WHEN** a client requests a guild player profile that includes Team data
+- **THEN** the response contains Team wins, games, recent-game counts, ratio,
+  and win rate values that satisfy the public leaderboard math invariants
 
 ### Requirement: Expose scoring explanation data
 
