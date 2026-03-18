@@ -4,7 +4,9 @@
 
 Define the guild-scoped public leaderboard and player profile behavior for the
 competitive web experience.
+
 ## Requirements
+
 ### Requirement: Build guild leaderboards from guild-relevant games
 
 The system SHALL build each guild leaderboard only from observed public
@@ -40,33 +42,45 @@ FFA.
 The system SHALL expose public `Team`, `FFA`, and `Support` leaderboard views
 for each guild. Each view SHALL use its own default ranking field and SHALL
 allow visitors to sort by additional supported metrics returned by the backend.
-The default visible table columns SHALL be explicit to the active view and
-SHALL NOT use generic placeholder labels such as `Primary Metric`. Each
-leaderboard entry SHALL indicate whether the profile is observed-only or
-linked, SHALL render the public player name without tracked guild clan-tag
-prefixes, and SHALL surface recent activity beside the score rather than
-embedding recency into the score itself.
+The public leaderboard SHALL use explicit view-specific column labels rather
+than generic labels such as `Score` or `Support`. The public Team and FFA
+leaderboards SHALL continue to expose public `ratio` and `win rate` values.
 
 The default visible columns SHALL be:
 
 - `Team`: `Player`, `Team Score`, `Wins`, `Win Rate`, `Games`,
-  `Games 30d`, `Support Bonus`, `Role`
-- `FFA`: `Player`, `FFA Score`, `Wins`, `Win Rate`, `Games`, `Games 30d`
+  `Games 30d`, `Support Bonus`, `Role`, plus public `ratio`
+- `FFA`: `Player`, `FFA Score`, `Wins`, `Win Rate`, `Games`, `Games 30d`,
+  plus public `ratio`
 - `Support`: `Player`, `Support Bonus`, `Troops Donated`, `Gold Donated`,
   `Donation Actions`, `Games 30d`, `Role`
+
+Each leaderboard entry SHALL indicate whether the profile is observed-only or
+linked, SHALL render the public player name without tracked guild clan-tag
+prefixes, and SHALL surface recent activity beside the score rather than
+embedding recency into the score itself. The `FFA` leaderboard SHALL include
+only players with at least one guild-relevant FFA game and SHALL NOT list
+players whose guild activity exists only in Team or Support scopes.
 
 #### Scenario: Visitor opens Team leaderboard
 
 - **WHEN** a visitor opens the Team leaderboard for a guild
-- **THEN** the page shows the default Team columns with explicit stat labels,
-  does not show a generic `Primary Metric` header, and labels each row as
-  linked or observed
+- **THEN** the page shows the default Team columns with explicit `Team Score`
+  and `Support Bonus` labels, includes the `Role` column, and keeps the public
+  Team `ratio` visible
 
 #### Scenario: Visitor opens FFA leaderboard
 
 - **WHEN** a visitor opens the FFA leaderboard for a guild
-- **THEN** the page shows the default FFA columns with `FFA Score`, `Wins`,
-  `Win Rate`, `Games`, and recent activity
+- **THEN** the page shows the default FFA columns with an explicit `FFA Score`
+  label, keeps the public FFA `ratio` visible, and includes only players with
+  guild-relevant FFA participation
+
+#### Scenario: Visitor opens Support leaderboard
+
+- **WHEN** a visitor opens the Support leaderboard for a guild
+- **THEN** the page shows support-focused columns with explicit donation metric
+  labels plus the `Role` column
 
 #### Scenario: Visitor sorts the Support leaderboard
 
@@ -108,37 +122,45 @@ existing fallback label `Flexible`.
 The system SHALL expose a public player profile page within each guild site for
 every player entry that appears on a guild leaderboard, including players who
 have never signed in. Each profile SHALL show the player's guild-scoped Team,
-FFA, and Support sections when available, SHALL omit an `overall` section, and
-SHALL render the public player name without tracked guild clan-tag prefixes.
-The profile SHALL also surface recent-activity metadata beside the cumulative
-score sections.
+FFA, and Support sections when available, SHALL omit an `overall` section,
+SHALL render the public player name without tracked guild clan-tag prefixes,
+and SHALL surface recent-activity metadata beside the cumulative score
+sections. The profile SHALL also show explicit `Wins / Games` score-note
+labels, the full badge catalog with locked badges, dated progression charts,
+recent-performance charts, multi-week contribution context, best-partner
+summaries, and roster summaries.
 
 #### Scenario: Visitor opens observed player profile
 
 - **WHEN** a visitor opens a guild player profile for an observed-only player
-- **THEN** the system serves the public guild-scoped competitive profile
-  without requiring authentication
+- **THEN** the system serves the public guild-scoped competitive profile with
+  badge and roster summary sections and without requiring authentication
 
 #### Scenario: Visitor opens linked player profile
 
 - **WHEN** a visitor opens a guild player profile for a linked player
-- **THEN** the system shows the guild-scoped competitive sections plus the
-  linked-only sections already supported for that player
+- **THEN** the system shows the guild-scoped competitive sections, badge and
+  roster summary sections, plus the linked-only sections already supported for
+  that player
 
 ### Requirement: Explain score composition in player-facing language
 
 The system SHALL present a concise explanation of how Team, FFA, and Support
 scores are evaluated. The Team explanation SHALL state that every guild-relevant
 Team game contributes positive score, that wins add extra value, that larger
-Team lobbies count more, that win rate is a light modifier, and that support
-adds a visible bonus. The explanation SHALL also state that recency is shown as
-activity context and SHALL NOT describe recency as a direct score factor.
+Team lobbies count more, that smaller players-per-team formats count more,
+that lower tracked guild presence on the player's team counts more, that win
+rate is a light modifier, and that support adds a visible bonus. The
+explanation SHALL also state that recency is shown as activity context and
+SHALL NOT describe recency as a direct score factor.
 
 #### Scenario: Visitor opens Team scoring explanation
 
 - **WHEN** a visitor opens scoring help for the Team leaderboard
 - **THEN** the page explains that participation volume is primary, wins add
-  bonus points, large Team lobbies are worth more, and support is additive
+  bonus points, more teams increase difficulty, smaller teams increase
+  difficulty, lower tracked guild presence on the player's team increases
+  difficulty, and support is additive
 
 #### Scenario: Visitor opens FFA scoring explanation
 
@@ -183,3 +205,27 @@ views.
   support adjustment
 - **THEN** the player's Team score includes the support bonus in addition to
   the non-support factors
+
+### Requirement: Publish public weekly rankings
+
+The system SHALL expose public weekly Team, FFA, and Support competition views
+for each guild. These views SHALL use calendar-week UTC windows and SHALL show
+leaders plus mover deltas versus the previous full week.
+
+#### Scenario: Visitor opens weekly Support rankings
+
+- **WHEN** a visitor opens the weekly view for Support
+- **THEN** the page shows current-week support leaders and movement from the
+  previous week
+
+### Requirement: Publish public rosters under a clearer UX name
+
+The system SHALL present `duo`, `trio`, and `quad` rankings under the public
+UX label `Rosters`. Compatibility routes MAY keep `Combos` aliases, but the
+primary public wording SHALL be `Rosters`.
+
+#### Scenario: Visitor opens roster rankings
+
+- **WHEN** a visitor opens the primary public roster view
+- **THEN** the page uses `Rosters` wording while still showing `duo`, `trio`,
+  and `quad` sections

@@ -11,7 +11,13 @@ test("leaderboard styles contain overflow within the table region on narrow scre
 
   expect(stylesheet).toContain(".table-wrap {");
   expect(stylesheet).toContain("max-width: 100%;");
+  expect(stylesheet).toContain("min-width: 0;");
   expect(stylesheet).toContain("overflow-x: auto;");
+  expect(stylesheet).toContain(".content {");
+  expect(stylesheet).toContain("grid-template-columns: minmax(0, 1fr);");
   expect(stylesheet).toContain(".panel {");
   expect(stylesheet).toContain("min-width: 0;");
+  expect(stylesheet).toContain("width: 100%;");
+  expect(stylesheet).toContain(".scoring-list {");
+  expect(stylesheet).toContain("overflow-wrap: anywhere;");
 });

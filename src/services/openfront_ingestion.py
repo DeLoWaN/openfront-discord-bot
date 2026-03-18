@@ -531,7 +531,7 @@ def _player_payload_map(game: ObservedGame | None) -> dict[str, dict[str, Any]]:
 
 def _stats_all_zero(stats: Any) -> bool:
     if not isinstance(stats, dict) or not stats:
-        return True
+        return False
     for value in stats.values():
         if isinstance(value, list):
             if any(str(item or "0") not in {"0", "0.0", ""} for item in value):
