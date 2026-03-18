@@ -109,9 +109,17 @@ windows, multiple clan tags, or resumed runs.
 
 The system SHALL fetch queued game details through a bounded worker pool while
 routing every discovery and hydration request through the shared OpenFront
-upstream gate. The shared gate SHALL be the effective upstream concurrency
-limit across processes, and the pipeline SHALL track per-item success and
-failure state without aborting the entire run on one transient error.
+upstream gate. Historical backfill discovery SHALL use bounded concurrency that
+can exploit the shared gate's two-request global limit, and the pipeline SHALL
+track per-item success and failure state without aborting the entire run on one
+transient error.
+
+#### Scenario: Team and FFA discovery overlap in time
+
+- **WHEN** ordinary historical backfill starts discovery for team and FFA
+  sources
+- **THEN** the pipeline may advance those discovery streams concurrently while
+  still respecting the shared OpenFront gate
 
 #### Scenario: Queued game hydration succeeds
 

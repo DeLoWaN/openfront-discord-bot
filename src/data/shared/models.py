@@ -121,6 +121,10 @@ class BackfillRun(SharedBaseModel):
     replayed_count = IntegerField(default=0)
     cache_failure_count = IntegerField(default=0)
     refreshed_guild_count = IntegerField(default=0)
+    openfront_rate_limit_hit_count = IntegerField(default=0)
+    openfront_retry_after_count = IntegerField(default=0)
+    openfront_cooldown_seconds_total = FloatField(default=0)
+    openfront_cooldown_seconds_max = FloatField(default=0)
 
     class Meta:
         table_name = "backfill_runs"
@@ -128,6 +132,7 @@ class BackfillRun(SharedBaseModel):
 
 class OpenFrontRateLimitState(SharedBaseModel):
     id = IntegerField(primary_key=True)
+    active_leases = IntegerField(default=0)
     lease_owner = CharField(null=True)
     lease_expires_at = DateTimeField(null=True)
     cooldown_until = DateTimeField(null=True)

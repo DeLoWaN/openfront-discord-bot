@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -11,6 +12,7 @@ from ...services.historical_backfill import (
     discover_team_games,
     hydrate_backfill_run,
     replay_backfill_run,
+    track_backfill_run_rate_limits,
 )
 from ...services.openfront_ingestion import ingest_game_payload
 
@@ -34,15 +36,19 @@ class WorkerRuntime:
         progress_every: int = 100,
     ) -> Any:
         run = create_backfill_run(start=start, end=end)
-        await discover_team_games(self.client, run.id)
-        await discover_ffa_games(self.client, run.id)
-        return await hydrate_backfill_run(
-            self.client,
-            run.id,
-            concurrency=concurrency,
-            refresh_batch_size=refresh_batch_size,
-            progress_every=progress_every,
-        )
+        with track_backfill_run_rate_limits(self.client, run.id):
+            await asyncio.gather(
+                discover_team_games(self.client, run.id),
+                discover_ffa_games(self.client, run.id),
+            )
+            return await hydrate_backfill_run(
+                self.client,
+                run.id,
+                concurrency=concurrency,
+                refresh_batch_size=refresh_batch_size,
+                progress_every=progress_every,
+                track_rate_limits=False,
+            )
 
     async def resume_backfill(
         self,
@@ -52,15 +58,19 @@ class WorkerRuntime:
         refresh_batch_size: int = 100,
         progress_every: int = 100,
     ) -> Any:
-        await discover_team_games(self.client, run_id)
-        await discover_ffa_games(self.client, run_id)
-        return await hydrate_backfill_run(
-            self.client,
-            run_id,
-            concurrency=concurrency,
-            refresh_batch_size=refresh_batch_size,
-            progress_every=progress_every,
-        )
+        with track_backfill_run_rate_limits(self.client, run_id):
+            await asyncio.gather(
+                discover_team_games(self.client, run_id),
+                discover_ffa_games(self.client, run_id),
+            )
+            return await hydrate_backfill_run(
+                self.client,
+                run_id,
+                concurrency=concurrency,
+                refresh_batch_size=refresh_batch_size,
+                progress_every=progress_every,
+                track_rate_limits=False,
+            )
 
     async def replay_backfill(
         self,

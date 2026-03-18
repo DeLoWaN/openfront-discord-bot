@@ -6,9 +6,10 @@ import os
 import random
 import re
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import aiohttp
 
@@ -18,7 +19,9 @@ OPENFRONT_BASE = "https://api.openfront.io"
 OPENFRONT_LOBBY_BASE = "https://openfront.io/api"
 PUBLIC_GAMES_MAX_RANGE = timedelta(days=2)
 OPENFRONT_GATE_LEASE_SECONDS = 30.0
-OPENFRONT_SUCCESS_DELAY_SECONDS = 1.0
+OPENFRONT_MAX_IN_FLIGHT = 2
+OPENFRONT_GATE_WAIT_POLL_SECONDS = 0.05
+OPENFRONT_SUCCESS_DELAY_SECONDS = 0.5
 OPENFRONT_RESET_HEADERS = (
     "ratelimit-reset",
     "x-ratelimit-reset",
@@ -28,6 +31,8 @@ OPENFRONT_RESET_HEADERS = (
 LOGGER = logging.getLogger(__name__)
 _LOCAL_GATE_LOCKS: dict[int, asyncio.Lock] = {}
 _LOCAL_COOLDOWN_UNTIL: datetime | None = None
+_LOCAL_ACTIVE_LEASES = 0
+_LOCAL_LEASE_EXPIRES_AT: datetime | None = None
 
 
 class OpenFrontError(Exception):
@@ -40,6 +45,14 @@ class OpenFrontError(Exception):
         super().__init__(message)
         self.status = status
         self.retry_after = retry_after
+
+
+@dataclass(frozen=True)
+class OpenFrontRateLimitEvent:
+    status: int
+    cooldown_seconds: float
+    source: str
+    url: str
 
 
 def _utcnow_naive() -> datetime:
@@ -116,23 +129,25 @@ def _parse_reset_after(value: str | None) -> float | None:
     return raw_value
 
 
-def _response_cooldown_seconds(headers: Dict[str, str]) -> float | None:
+def _response_cooldown_seconds(
+    headers: Dict[str, str],
+) -> tuple[float | None, str | None]:
     retry_after = _parse_retry_after(headers.get("retry-after"))
     if retry_after is not None:
-        return retry_after
+        return retry_after, "retry-after"
 
     retry_after_ms = headers.get("retry-after-ms")
     if retry_after_ms is not None:
         try:
-            return max(float(retry_after_ms) / 1000.0, 0.0)
+            return max(float(retry_after_ms) / 1000.0, 0.0), "retry-after-ms"
         except (TypeError, ValueError):
             pass
 
     for header_name in OPENFRONT_RESET_HEADERS:
         reset_after = _parse_reset_after(headers.get(header_name))
         if reset_after is not None:
-            return reset_after
-    return None
+            return reset_after, header_name
+    return None, None
 
 
 def _shared_database_available():
@@ -155,19 +170,44 @@ def _get_local_gate_lock() -> asyncio.Lock:
     return lock
 
 
-def _local_wait_seconds() -> float:
-    global _LOCAL_COOLDOWN_UNTIL
+def _reset_local_leases_if_expired(now: datetime) -> None:
+    global _LOCAL_ACTIVE_LEASES, _LOCAL_LEASE_EXPIRES_AT
+    if _LOCAL_LEASE_EXPIRES_AT and _LOCAL_LEASE_EXPIRES_AT <= now:
+        _LOCAL_ACTIVE_LEASES = 0
+        _LOCAL_LEASE_EXPIRES_AT = None
+
+
+def _local_wait_or_acquire() -> float:
+    global _LOCAL_ACTIVE_LEASES, _LOCAL_LEASE_EXPIRES_AT
     now = _utcnow_naive()
+    _reset_local_leases_if_expired(now)
     if _LOCAL_COOLDOWN_UNTIL and _LOCAL_COOLDOWN_UNTIL > now:
         return (_LOCAL_COOLDOWN_UNTIL - now).total_seconds()
+    if _LOCAL_ACTIVE_LEASES >= OPENFRONT_MAX_IN_FLIGHT:
+        if _LOCAL_LEASE_EXPIRES_AT and _LOCAL_LEASE_EXPIRES_AT > now:
+            return min(
+                (_LOCAL_LEASE_EXPIRES_AT - now).total_seconds(),
+                OPENFRONT_GATE_WAIT_POLL_SECONDS,
+            )
+        _LOCAL_ACTIVE_LEASES = 0
+    _LOCAL_ACTIVE_LEASES += 1
+    _LOCAL_LEASE_EXPIRES_AT = now + timedelta(seconds=OPENFRONT_GATE_LEASE_SECONDS)
     return 0.0
 
 
-def _set_local_cooldown(delay_seconds: float) -> None:
-    global _LOCAL_COOLDOWN_UNTIL
+def _release_local_gate(delay_seconds: float) -> None:
+    global _LOCAL_ACTIVE_LEASES, _LOCAL_COOLDOWN_UNTIL, _LOCAL_LEASE_EXPIRES_AT
+    now = _utcnow_naive()
+    _reset_local_leases_if_expired(now)
+    if _LOCAL_ACTIVE_LEASES > 0:
+        _LOCAL_ACTIVE_LEASES -= 1
     _LOCAL_COOLDOWN_UNTIL = _utcnow_naive() + timedelta(
         seconds=max(delay_seconds, 0.0)
     )
+    if _LOCAL_ACTIVE_LEASES > 0:
+        _LOCAL_LEASE_EXPIRES_AT = now + timedelta(seconds=OPENFRONT_GATE_LEASE_SECONDS)
+    else:
+        _LOCAL_LEASE_EXPIRES_AT = None
 
 
 def _shared_wait_or_acquire(owner_id: str) -> float | None:
@@ -188,17 +228,25 @@ def _shared_wait_or_acquire(owner_id: str) -> float | None:
         state = query.get()
         now = _utcnow_naive()
 
+        if state.lease_expires_at and state.lease_expires_at <= now:
+            state.active_leases = 0
+            state.lease_owner = None
+            state.lease_expires_at = None
+
         if state.cooldown_until and state.cooldown_until > now:
+            state.save()
             return (state.cooldown_until - now).total_seconds()
 
-        if (
-            state.lease_owner
-            and state.lease_owner != owner_id
-            and state.lease_expires_at
-            and state.lease_expires_at > now
-        ):
-            return (state.lease_expires_at - now).total_seconds()
+        if state.active_leases >= OPENFRONT_MAX_IN_FLIGHT:
+            if state.lease_expires_at and state.lease_expires_at > now:
+                state.save()
+                return min(
+                    (state.lease_expires_at - now).total_seconds(),
+                    OPENFRONT_GATE_WAIT_POLL_SECONDS,
+                )
+            state.active_leases = 0
 
+        state.active_leases += 1
         state.lease_owner = owner_id
         state.lease_expires_at = now + timedelta(seconds=OPENFRONT_GATE_LEASE_SECONDS)
         state.save()
@@ -223,12 +271,16 @@ def _release_shared_gate(owner_id: str, delay_seconds: float, reason: str) -> bo
         state = query.get()
         now = _utcnow_naive()
         cooldown_until = now + timedelta(seconds=max(delay_seconds, 0.0))
+        if state.lease_expires_at and state.lease_expires_at <= now:
+            state.active_leases = 0
         if state.cooldown_until is None or cooldown_until > state.cooldown_until:
             state.cooldown_until = cooldown_until
             state.cooldown_reason = reason
-        if state.lease_owner == owner_id or (
-            state.lease_expires_at and state.lease_expires_at <= now
-        ):
+        if state.active_leases > 0:
+            state.active_leases -= 1
+        if state.active_leases > 0:
+            state.lease_expires_at = now + timedelta(seconds=OPENFRONT_GATE_LEASE_SECONDS)
+        else:
             state.lease_owner = None
             state.lease_expires_at = None
         state.save()
@@ -236,8 +288,7 @@ def _release_shared_gate(owner_id: str, delay_seconds: float, reason: str) -> bo
 
 
 class _OpenFrontGateLease:
-    def __init__(self, lock: asyncio.Lock, owner_id: str, shared_gate: bool):
-        self._lock = lock
+    def __init__(self, owner_id: str, shared_gate: bool):
         self._owner_id = owner_id
         self._shared_gate = shared_gate
         self._released = False
@@ -249,19 +300,16 @@ class _OpenFrontGateLease:
             if self._shared_gate:
                 released = _release_shared_gate(self._owner_id, delay_seconds, reason)
                 if not released:
-                    _set_local_cooldown(delay_seconds)
+                    _release_local_gate(delay_seconds)
             else:
-                _set_local_cooldown(delay_seconds)
+                _release_local_gate(delay_seconds)
         except Exception as exc:
             LOGGER.warning(
                 "Shared OpenFront gate release failed (%s). Falling back to local cooldown.",
                 exc,
             )
-            _set_local_cooldown(delay_seconds)
-        finally:
-            if self._lock.locked():
-                self._lock.release()
-            self._released = True
+            _release_local_gate(delay_seconds)
+        self._released = True
 
 
 async def _acquire_request_gate(owner_id: str) -> _OpenFrontGateLease:
@@ -279,16 +327,22 @@ async def _acquire_request_gate(owner_id: str) -> _OpenFrontGateLease:
                 shared_wait = None
 
             if shared_wait is None:
-                local_wait = _local_wait_seconds()
+                local_wait = _local_wait_or_acquire()
                 if local_wait <= 0:
-                    return _OpenFrontGateLease(lock, owner_id, False)
+                    lock.release()
+                    return _OpenFrontGateLease(owner_id, False)
+                lock.release()
                 await asyncio.sleep(local_wait)
+                await lock.acquire()
                 continue
 
             if shared_wait <= 0:
-                return _OpenFrontGateLease(lock, owner_id, True)
+                lock.release()
+                return _OpenFrontGateLease(owner_id, True)
 
+            lock.release()
             await asyncio.sleep(shared_wait)
+            await lock.acquire()
     except Exception:
         if lock.locked():
             lock.release()
@@ -296,14 +350,62 @@ async def _acquire_request_gate(owner_id: str) -> _OpenFrontGateLease:
 
 
 class OpenFrontClient:
-    def __init__(self, session: aiohttp.ClientSession | None = None):
+    def __init__(
+        self,
+        session: aiohttp.ClientSession | None = None,
+        on_rate_limit: Callable[[OpenFrontRateLimitEvent], None] | None = None,
+    ):
         self._session = session
         self._owns_session = session is None
         self._request_owner = f"{os.getpid()}:{uuid.uuid4().hex}"
+        self._rate_limit_observers: list[Callable[[OpenFrontRateLimitEvent], None]] = []
+        if on_rate_limit is not None:
+            self._rate_limit_observers.append(on_rate_limit)
 
     async def close(self):
         if self._owns_session and self._session:
             await self._session.close()
+
+    def add_rate_limit_observer(
+        self,
+        observer: Callable[[OpenFrontRateLimitEvent], None],
+    ) -> Callable[[], None]:
+        self._rate_limit_observers.append(observer)
+
+        def remove() -> None:
+            try:
+                self._rate_limit_observers.remove(observer)
+            except ValueError:
+                return
+
+        return remove
+
+    def set_rate_limit_observer(
+        self,
+        observer: Callable[[OpenFrontRateLimitEvent], None] | None,
+    ) -> Callable[[OpenFrontRateLimitEvent], None] | None:
+        previous = self._rate_limit_observers[-1] if self._rate_limit_observers else None
+        self._rate_limit_observers = [] if observer is None else [observer]
+        return previous
+
+    def _emit_rate_limit_event(
+        self,
+        *,
+        status: int,
+        cooldown_seconds: float,
+        source: str,
+        url: str,
+    ) -> None:
+        if status != 429:
+            return
+        event = OpenFrontRateLimitEvent(
+            status=status,
+            cooldown_seconds=cooldown_seconds,
+            source=source,
+            url=url,
+        )
+        for observer in list(self._rate_limit_observers):
+            observer(event)
 
     async def _request_with_headers(
         self,
@@ -332,10 +434,12 @@ class OpenFrontClient:
                     headers = {
                         key.lower(): value for key, value in resp.headers.items()
                     }
-                    rate_limit_delay = _response_cooldown_seconds(headers)
+                    rate_limit_delay, rate_limit_source = _response_cooldown_seconds(
+                        headers
+                    )
                     if resp.status in fail_fast:
                         lease.release(
-                            max(rate_limit_delay or 0.0, OPENFRONT_SUCCESS_DELAY_SECONDS),
+                            rate_limit_delay or 0.0,
                             f"status:{resp.status}",
                         )
                         raise OpenFrontError(
@@ -348,6 +452,12 @@ class OpenFrontClient:
                             rate_limit_delay
                             if rate_limit_delay is not None
                             else backoff + random.random()
+                        )
+                        self._emit_rate_limit_event(
+                            status=resp.status,
+                            cooldown_seconds=retry_delay,
+                            source=rate_limit_source or "fallback",
+                            url=url,
                         )
                         lease.release(retry_delay, f"status:{resp.status}")
                         raise OpenFrontError(
