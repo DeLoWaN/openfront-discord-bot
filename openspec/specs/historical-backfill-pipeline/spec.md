@@ -145,6 +145,12 @@ The system SHALL refresh guild player aggregates only for guilds affected by
 hydrated historical games, and it SHALL perform those refreshes in batches
 instead of once per hydrated game.
 
+Ordinary known-history skips SHALL also be allowed to contribute guild ids to
+the affected aggregate refresh set when the system can derive those guilds from
+already stored observations for the skipped game. This refresh behavior SHALL
+NOT require refetching, replaying, or re-ingesting the skipped known-history
+game.
+
 #### Scenario: Hydrated game affects one guild
 
 - **WHEN** ingestion of a hydrated historical game matches one guild
@@ -156,6 +162,20 @@ instead of once per hydrated game.
 - **WHEN** ingestion of a hydrated historical game matches more than one guild
 - **THEN** each matched guild is added to the affected refresh set for batched
   aggregate refresh
+
+#### Scenario: Skipped known-history game has stored guild observations
+
+- **WHEN** ordinary backfill skips a known readable game and stored participant
+  observations already identify one or more affected guilds for that game
+- **THEN** those guilds are added to the batched aggregate refresh set without
+  replaying the skipped game
+
+#### Scenario: Skipped known-history game repairs stale aggregates
+
+- **WHEN** an operator reruns an ordinary backfill over a date range whose
+  known readable games already have stored observations
+- **THEN** the run may refresh stale guild aggregates from those stored
+  observations even though the underlying games remain skipped known history
 
 ### Requirement: Emit progress logs for long historical runs
 
@@ -196,8 +216,8 @@ ordinary operator action that reparses known history.
 
 - **WHEN** a new backfill run discovers a game that was already hydrated
   successfully in an earlier run and its cached payload is readable
-- **THEN** ordinary hydration skips that game and records it as known history
-  instead of refetching or re-ingesting it
+- **THEN** ordinary backfill skips that game for fetch and re-ingest work while
+  preserving any allowed aggregate refresh from already stored observations
 
 #### Scenario: Resume run encounters earlier successful readable history
 
@@ -235,4 +255,3 @@ upstream data.
 - **WHEN** explicit replay attempts to read a cached payload that is unreadable
 - **THEN** the system reports a cache-integrity replay failure and does not
   silently perform a new crawl
-

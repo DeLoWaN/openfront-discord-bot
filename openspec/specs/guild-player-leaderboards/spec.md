@@ -55,6 +55,11 @@ The default visible columns SHALL be:
 - `Support`: `Player`, `Support Bonus`, `Troops Donated`, `Gold Donated`,
   `Donation Actions`, `Games 30d`, `Role`
 
+Public Team and FFA leaderboard math SHALL remain internally valid for every
+published row. A row that is shown publicly SHALL NOT expose more wins than
+games, SHALL NOT expose a recent-game count greater than the corresponding
+mode game count, and SHALL NOT expose a win rate above `100%`.
+
 #### Scenario: Visitor opens Team leaderboard
 
 - **WHEN** a visitor opens the Team leaderboard for a guild
@@ -67,6 +72,19 @@ The default visible columns SHALL be:
 - **WHEN** a visitor opens the FFA leaderboard for a guild
 - **THEN** the page shows the default FFA columns with `FFA Score`, `Wins`,
   `Win Rate`, `Games`, and recent activity
+
+#### Scenario: Visitor opens FFA leaderboard with valid public stats
+
+- **WHEN** a visitor opens the FFA leaderboard for a guild
+- **THEN** every published row shows a mathematically valid `Wins`, `Games`,
+  `Ratio`, and `Win Rate`
+
+#### Scenario: Stored aggregate row is invalid
+
+- **WHEN** a stored guild aggregate row would expose more wins than games for a
+  public leaderboard entry
+- **THEN** the public leaderboard does not publish that invalid row as if it
+  were valid competitive data
 
 #### Scenario: Visitor sorts the Support leaderboard
 
@@ -113,6 +131,10 @@ SHALL render the public player name without tracked guild clan-tag prefixes.
 The profile SHALL also surface recent-activity metadata beside the cumulative
 score sections.
 
+Public Team and FFA profile sections SHALL obey the same validity constraints
+as leaderboard rows. A published Team or FFA section SHALL NOT show more wins
+than games or a win rate above `100%`.
+
 #### Scenario: Visitor opens observed player profile
 
 - **WHEN** a visitor opens a guild player profile for an observed-only player
@@ -124,6 +146,13 @@ score sections.
 - **WHEN** a visitor opens a guild player profile for a linked player
 - **THEN** the system shows the guild-scoped competitive sections plus the
   linked-only sections already supported for that player
+
+#### Scenario: Visitor opens player profile with valid FFA section
+
+- **WHEN** a visitor opens a public guild player profile that includes an FFA
+  section
+- **THEN** the profile shows mathematically valid FFA wins, games, ratio, and
+  win rate values
 
 ### Requirement: Explain score composition in player-facing language
 

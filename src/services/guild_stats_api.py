@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from ..data.shared.models import Guild, GuildPlayerAggregate
@@ -12,7 +13,10 @@ from .guild_engagement_api import (
 )
 from .guild_leaderboard import get_guild_player_profile, player_state_label
 from .guild_sites import list_guild_clan_tags
-from .openfront_ingestion import strip_tracked_clan_tag_prefix
+from .openfront_ingestion import (
+    strip_tracked_clan_tag_prefix,
+    validate_public_aggregate_counts,
+)
 from .player_linking import compute_linked_profile_stats
 from .guild_weekly_rankings import build_player_weekly_summary
 
@@ -67,6 +71,7 @@ SORT_FIELDS_BY_VIEW = {
     ),
 }
 DEFAULT_ORDER = "desc"
+LOGGER = logging.getLogger(__name__)
 COLUMNS_BY_VIEW = {
     "team": (
         {"key": "display_username", "label": "Player", "sortable": True, "sort_key": "display_username"},
@@ -152,11 +157,28 @@ def _legacy_team_win_count(aggregate: GuildPlayerAggregate) -> int:
 def _row_payload(
     aggregate: GuildPlayerAggregate,
     tracked_tags: set[str] | None = None,
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
     team_game_count = _legacy_team_game_count(aggregate)
     team_win_count = _legacy_team_win_count(aggregate)
     ffa_game_count = aggregate.ffa_game_count
     ffa_win_count = aggregate.ffa_win_count
+    errors = validate_public_aggregate_counts(
+        normalized_username=aggregate.normalized_username,
+        team_win_count=team_win_count,
+        team_game_count=team_game_count,
+        ffa_win_count=ffa_win_count,
+        ffa_game_count=ffa_game_count,
+        team_recent_game_count_30d=int(aggregate.team_recent_game_count_30d or 0),
+        ffa_recent_game_count_30d=int(aggregate.ffa_recent_game_count_30d or 0),
+    )
+    if errors:
+        LOGGER.warning(
+            "Skipping invalid public aggregate guild_id=%s normalized_username=%s errors=%s",
+            aggregate.guild_id,
+            aggregate.normalized_username,
+            ", ".join(errors),
+        )
+        return None
     team_win_rate = team_win_count / team_game_count if team_game_count else 0.0
     ffa_win_rate = ffa_win_count / ffa_game_count if ffa_game_count else 0.0
     display_username = strip_tracked_clan_tag_prefix(
@@ -215,8 +237,9 @@ def build_leaderboard_response(
     normalized_view = _normalized_view(view)
     tracked_tags = set(list_guild_clan_tags(guild))
     rows = [
-        _row_payload(row, tracked_tags)
+        payload
         for row in GuildPlayerAggregate.select().where(GuildPlayerAggregate.guild == guild)
+        if (payload := _row_payload(row, tracked_tags)) is not None
     ]
     if normalized_view == "ffa":
         rows = [row for row in rows if int(row["ffa_game_count"] or 0) > 0]
@@ -378,6 +401,8 @@ async def build_player_profile_response(
         return None
 
     player = _row_payload(aggregate, set(list_guild_clan_tags(guild)))
+    if player is None:
+        return None
     badges = list_player_badges(guild, normalized_username)
     best_partners = list_player_best_partners(guild, normalized_username)
     combo_summaries = list_player_combo_summaries(guild, normalized_username)
