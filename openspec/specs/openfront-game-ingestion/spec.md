@@ -4,7 +4,9 @@
 
 Define how guild-relevant OpenFront observations are ingested into persisted
 participant records and derived aggregates.
+
 ## Requirements
+
 ### Requirement: Resolve effective clan tags for observations
 
 For each observed session or game participant, the system SHALL determine an
@@ -61,24 +63,14 @@ without requiring Team support metrics.
 The system SHALL maintain per-guild player aggregates derived from persisted
 guild-relevant observations so leaderboard and public profile pages can be
 served from stored guild stats rather than recalculating from raw observations
-on each request. The aggregate model SHALL maintain separate inputs for Team,
-FFA, and Support views, including mode-specific game counts, win counts,
-donation totals, donation action counts, recent-activity metadata, and
-player-facing sort metrics. The aggregate model SHALL NOT compute or persist a
-public `overall` score.
+on each request. Aggregate refresh SHALL also rebuild derived daily, weekly,
+roster, benchmark, and recent-game read models used by the public site.
 
-#### Scenario: New Team observation refreshes Team aggregates
+#### Scenario: Aggregate refresh rebuilds read models
 
-- **WHEN** a new guild-relevant Team observation is persisted for a player
-- **THEN** the corresponding guild player aggregates are refreshed for Team and
-  Support views
-
-#### Scenario: New FFA observation refreshes FFA aggregates
-
-- **WHEN** a new guild-relevant Free For All observation is persisted for a
-  player
-- **THEN** the corresponding guild player aggregates are refreshed for the FFA
-  view
+- **WHEN** guild aggregates are refreshed from stored observations
+- **THEN** the system also rebuilds the derived read models needed for public
+  daily, weekly, roster, and recent-game views
 
 ### Requirement: Merge observed players across tracked clan-tag username variants
 
@@ -194,8 +186,12 @@ independently from the Team score.
 
 The system SHALL infer Team difficulty from stored game data and SHALL make the
 Team score increase monotonically with the number of teams in the lobby. The
-difficulty model MUST value a `60`-team win more than a `10`-team win, while
-using damped growth so a few extreme lobbies do not dominate the entire
+difficulty model MUST also increase when the inferred players-per-team value is
+smaller and when the tracked guild presence on the player's team is lower. The
+team-count signal SHALL remain primary, while the smaller-team and lower-guild-
+presence signals SHALL act as lighter multiplicative refinements. The
+difficulty model MUST still value a `60`-team win more than a `10`-team win
+while using damped growth so a few extreme lobbies do not dominate the entire
 leaderboard.
 
 #### Scenario: Large Team lobby is ingested
@@ -203,6 +199,25 @@ leaderboard.
 - **WHEN** a guild-relevant Team game is inferred to have more than `10` teams
 - **THEN** the Team contribution model applies a higher difficulty value than
   it would for a `10`-team game
+
+#### Scenario: Smaller team format increases difficulty
+
+- **WHEN** the system compares two Team wins with the same number of teams but
+  one game has fewer players per team
+- **THEN** the smaller-team game receives the higher Team difficulty value
+
+#### Scenario: Lower tracked guild presence increases difficulty
+
+- **WHEN** the system compares two Team wins with the same lobby size and team
+  size but one player's team has fewer tracked guild-tag teammates
+- **THEN** the lower-guild-presence win receives the higher Team difficulty
+  value
+
+#### Scenario: Missing players-per-team signal falls back safely
+
+- **WHEN** the system cannot infer players per team for a Team game
+- **THEN** the smaller-team and guild-presence refinements fall back to a
+  neutral value instead of inventing unsupported difficulty
 
 #### Scenario: Difficulty grows without exploding
 
@@ -227,3 +242,45 @@ recent-game counters without using them to decay the main Team or FFA score.
 - **WHEN** a player has played many recent Team or FFA games
 - **THEN** the stored recent-activity metadata reflects that activity beside
   the cumulative score
+
+### Requirement: Rebuild roster aggregates from confidence-high team inference
+
+The system SHALL rebuild `duo`, `trio`, and `quad` roster aggregates from
+guild-relevant Team observations. A roster SHALL be accepted only when the
+system can infer it with high confidence through exact team-size alignment or a
+strong no-spawn filter on overflow same-tag players.
+
+#### Scenario: Exact same-tag roster matches inferred team size
+
+- **WHEN** tracked same-tag players in a Team game exactly match the inferred
+  team size
+- **THEN** the system records a roster event for that exact tracked roster
+
+#### Scenario: Overflow same-tag players can be filtered as non-spawned
+
+- **WHEN** tracked same-tag players exceed the inferred team size but overflow
+  players have zero meaningful economy and action metrics
+- **THEN** the system filters those overflow players and records the remaining
+  exact roster
+
+#### Scenario: Same-tag overflow remains ambiguous
+
+- **WHEN** tracked same-tag overflow cannot be resolved with high confidence
+- **THEN** the system excludes that game from public roster rankings
+
+### Requirement: Maintain weekly guild ranking read models
+
+The system SHALL maintain per-guild weekly ranking read models for Team, FFA,
+and Support scopes. Weekly rows SHALL be bucketed by UTC calendar week and use
+the same scoring formulas as the corresponding all-time views, scoped only to
+games ending inside the week.
+
+#### Scenario: Team game contributes to current UTC week
+
+- **WHEN** a Team game ends within a UTC calendar week
+- **THEN** its Team contribution is reflected in that week's Team ranking rows
+
+#### Scenario: Weekly scope is absent for a player in a week
+
+- **WHEN** a player has no qualifying games in a given week and scope
+- **THEN** the system does not fabricate a weekly score row for that player

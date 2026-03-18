@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
 import re
 from dataclasses import dataclass
@@ -23,6 +24,7 @@ _LEADING_CLAN_TAG_RE = re.compile(r"^\s*\[([A-Za-z0-9]+)\]\s*(.*)$")
 _TEAM_ROLE_LABEL_MIN_GAMES = 5
 _TEAM_ROLE_LABEL_DOMINANT_SHARE = 0.55
 _ACTIVE_TEAM_ROLE_LABELS = ("Frontliner", "Hybrid", "Backliner")
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -574,7 +576,7 @@ def _player_payload_map(game: ObservedGame | None) -> dict[str, dict[str, Any]]:
 
 def _stats_all_zero(stats: Any) -> bool:
     if not isinstance(stats, dict) or not stats:
-        return True
+        return False
     for value in stats.values():
         if isinstance(value, list):
             if any(str(item or "0") not in {"0", "0.0", ""} for item in value):
@@ -646,6 +648,37 @@ def _compute_team_game_role(
     if attack_troops_total > 0 or attack_action_count > 0:
         return "Frontliner"
     return "Flexible"
+
+
+def validate_public_aggregate_counts(
+    *,
+    normalized_username: str,
+    team_win_count: int,
+    team_game_count: int,
+    ffa_win_count: int,
+    ffa_game_count: int,
+    team_recent_game_count_30d: int,
+    ffa_recent_game_count_30d: int,
+) -> list[str]:
+    errors: list[str] = []
+    checks = (
+        ("team", team_win_count, team_game_count, team_recent_game_count_30d),
+        ("ffa", ffa_win_count, ffa_game_count, ffa_recent_game_count_30d),
+    )
+    for scope, win_count, game_count, recent_count in checks:
+        if win_count < 0 or game_count < 0 or recent_count < 0:
+            errors.append(f"{scope}: negative counts are not allowed")
+        if win_count > game_count:
+            errors.append(f"{scope}: wins exceed games")
+        if recent_count > game_count:
+            errors.append(f"{scope}: recent games exceed total games")
+    if errors:
+        LOGGER.warning(
+            "invalid_public_aggregate normalized_username=%s errors=%s",
+            normalized_username,
+            ", ".join(errors),
+        )
+    return errors
 
 
 def _compute_role_label(payload: dict[str, Any]) -> str:
@@ -859,6 +892,21 @@ def refresh_guild_player_aggregates(
             ) * _win_rate_multiplier(ffa_win_count, ffa_game_count)
         payload["ffa_score"] = round(ffa_score, 2)
         payload["role_label"] = _compute_role_label(payload)
+
+        errors = validate_public_aggregate_counts(
+            normalized_username=str(payload["normalized_username"]),
+            team_win_count=team_win_count,
+            team_game_count=team_game_count,
+            ffa_win_count=ffa_win_count,
+            ffa_game_count=ffa_game_count,
+            team_recent_game_count_30d=int(payload["team_recent_game_count_30d"]),
+            ffa_recent_game_count_30d=int(payload["ffa_recent_game_count_30d"]),
+        )
+        if errors:
+            raise ValueError(
+                "Rebuilt guild aggregate is invalid for "
+                f"{payload['normalized_username']}: {', '.join(errors)}"
+            )
 
         payload.pop("_team_presence_score", None)
         payload.pop("_team_result_score", None)

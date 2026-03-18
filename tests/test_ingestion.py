@@ -101,6 +101,45 @@ def test_team_game_points_reward_wins_without_subtracting_losses():
     assert win_points > loss_points
 
 
+def test_no_spawn_detection_requires_explicit_zero_activity_evidence(tmp_path):
+    from src.data.shared.models import GameParticipant, ObservedGame
+    from src.services.guild_sites import provision_guild_site
+    from src.services.openfront_ingestion import _participant_is_no_spawn
+
+    setup_shared_database(tmp_path)
+    guild = provision_guild_site(
+        slug="north",
+        subdomain="north",
+        display_name="North",
+        clan_tags=["NU"],
+    )
+    game = ObservedGame.create(
+        openfront_game_id="unknown-activity",
+        game_type="PUBLIC",
+        mode_name="Team",
+        num_teams=6,
+        total_player_count=12,
+        ended_at=datetime(2026, 3, 1, 12, 0, 0),
+    )
+    participant = GameParticipant.create(
+        game=game,
+        guild=guild,
+        raw_username="Veteran",
+        normalized_username="veteran",
+        raw_clan_tag="NU",
+        effective_clan_tag="NU",
+        clan_tag_source="api",
+        client_id="unknown-activity",
+        did_win=1,
+    )
+
+    assert _participant_is_no_spawn(participant) is False
+    assert _participant_is_no_spawn(
+        participant,
+        {"stats": {"gold": ["0"], "attacks": ["0"], "conquests": ["0", "0", "0"]}},
+    ) is True
+
+
 def test_ingest_game_payload_persists_guild_relevant_participants_and_aggregates(
     tmp_path,
 ):
@@ -201,7 +240,6 @@ def test_ingest_game_payload_refreshes_leaderboard_aggregates_immediately(tmp_pa
     assert rows[0]["normalized_username"] == "ace"
     assert rows[0]["win_count"] == 1
 
-
 def test_ingest_game_payload_skips_rewriting_equivalent_observed_game_and_participants(
     tmp_path,
 ):
@@ -243,6 +281,44 @@ def test_ingest_game_payload_skips_rewriting_equivalent_observed_game_and_partic
     assert participant_after.id == participant_before.id
     assert observed_after.updated_at == observed_updated_at_before
     assert participant_after.updated_at == participant_updated_at_before
+
+
+def test_ingest_game_payload_is_idempotent_for_same_openfront_game_id(tmp_path):
+    from src.data.shared.models import GameParticipant, GuildPlayerAggregate, ObservedGame
+    from src.services.guild_sites import provision_guild_site
+    from src.services.openfront_ingestion import ingest_game_payload
+
+    setup_shared_database(tmp_path)
+    guild = provision_guild_site(
+        slug="north",
+        subdomain="north",
+        display_name="North",
+        clan_tags=["NU"],
+    )
+
+    payload = {
+        "info": {
+            "gameID": "same-ffa-game",
+            "config": {"gameType": "Public", "gameMode": "Free For All"},
+            "winner": ["player", "c1"],
+            "players": [
+                {"clientID": "c1", "username": "[NU] Gravity", "clanTag": "NU"},
+                {"clientID": "c9", "username": "Enemy", "clanTag": "XYZ"},
+            ],
+        }
+    }
+
+    ingest_game_payload(payload)
+    ingest_game_payload(payload)
+
+    aggregate = GuildPlayerAggregate.get(GuildPlayerAggregate.guild == guild)
+
+    assert ObservedGame.select().count() == 1
+    assert GameParticipant.select().count() == 1
+    assert aggregate.win_count == 1
+    assert aggregate.game_count == 1
+    assert aggregate.ffa_win_count == 1
+    assert aggregate.ffa_game_count == 1
 
 
 def test_backfill_public_games_fetches_and_ingests_matching_games(tmp_path):

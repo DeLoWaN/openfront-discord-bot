@@ -59,7 +59,7 @@ def make_client(tmp_path):
         team_win_count=5,
         team_game_count=11,
         ffa_win_count=2,
-        ffa_game_count=1,
+        ffa_game_count=2,
         team_score=180.0,
         ffa_score=90.0,
         team_recent_game_count_30d=8,
@@ -201,3 +201,42 @@ def test_guild_stats_api_uses_explicit_view_columns_and_filters_ffa_rows(tmp_pat
         "Role",
     ]
     assert [row["display_username"] for row in ffa.json()["rows"]] == ["Bolt", "Ace"]
+
+
+def test_guild_stats_api_excludes_invalid_public_aggregate_rows(tmp_path):
+    from src.data.shared.models import GuildPlayerAggregate
+
+    client = make_client(tmp_path)
+    GuildPlayerAggregate.create(
+        guild=1,
+        normalized_username="glitch",
+        display_username="[NU] Glitch",
+        last_observed_clan_tag="NU",
+        win_count=9,
+        game_count=9,
+        team_win_count=7,
+        team_game_count=7,
+        ffa_win_count=3,
+        ffa_game_count=1,
+        team_score=140.0,
+        ffa_score=100.0,
+        team_recent_game_count_30d=3,
+        ffa_recent_game_count_30d=1,
+        donated_troops_total=0,
+        donated_gold_total=0,
+        donation_action_count=0,
+        support_bonus=0.0,
+        attack_troops_total=90000,
+        attack_action_count=4,
+        role_label="Flexible",
+        last_team_game_at=datetime(2026, 3, 16, 12, 0, 0),
+        last_ffa_game_at=datetime(2026, 3, 16, 13, 0, 0),
+        last_game_at=datetime(2026, 3, 16, 13, 0, 0),
+    )
+
+    ffa = client.get("/api/leaderboards/ffa", headers={"host": "north.example.test"})
+    profile = client.get("/api/players/glitch", headers={"host": "north.example.test"})
+
+    assert ffa.status_code == 200
+    assert [row["display_username"] for row in ffa.json()["rows"]] == ["Bolt", "Ace"]
+    assert profile.status_code == 404

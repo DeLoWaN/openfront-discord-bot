@@ -665,6 +665,16 @@ def _should_skip_known_history(backfill_game: BackfillGame) -> bool:
     )
 
 
+def _stored_guild_ids_for_game(openfront_game_id: str) -> set[int]:
+    query = (
+        GameParticipant.select(GameParticipant.guild_id)
+        .join(ObservedGame)
+        .where(ObservedGame.openfront_game_id == openfront_game_id)
+        .distinct()
+    )
+    return {int(row.guild_id) for row in query}
+
+
 def _finalize_run(run: BackfillRun) -> None:
     _sync_run_rate_limit_counters(run)
     remaining = (
@@ -920,8 +930,11 @@ async def hydrate_backfill_run(
     async def process_game(backfill_game: BackfillGame):
         async with semaphore:
             if _should_skip_known_history(backfill_game):
+                matched_guild_ids = _stored_guild_ids_for_game(
+                    backfill_game.openfront_game_id
+                )
                 _record_skipped_known(run, backfill_game)
-                return HydrationResult("skipped_known", set())
+                return HydrationResult("skipped_known", matched_guild_ids)
             backfill_game.attempts += 1
             try:
                 cache_entry, payload = _get_payload_from_cache(backfill_game)
@@ -975,10 +988,10 @@ async def hydrate_backfill_run(
                             record_exc,
                         )
                     continue
-                if result.outcome == "skipped_known":
-                    continue
                 if result.matched_guild_ids:
                     affected_guild_ids.update(result.matched_guild_ids)
+                if result.outcome == "skipped_known":
+                    continue
                 processed_successes += 1
             _sync_run_rate_limit_counters(run)
             run.save()
