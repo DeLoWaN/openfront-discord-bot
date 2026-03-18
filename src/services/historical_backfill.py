@@ -3,9 +3,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
+from peewee import fn
+
+from ..core.openfront import OpenFrontRateLimitEvent
 from ..data.database import shared_database
 from ..data.shared.models import (
     BackfillCursor,
@@ -21,6 +25,7 @@ from .openfront_ingestion import ingest_game_payload, refresh_guild_player_aggre
 
 LOGGER = logging.getLogger(__name__)
 DISCOVERY_WINDOW = timedelta(days=2)
+TEAM_DISCOVERY_CONCURRENCY = 2
 
 
 @dataclass(frozen=True)
@@ -140,6 +145,79 @@ def _complete_or_advance_cursor(
         cursor.next_started_at = window_end
     cursor.next_offset = 0
     cursor.save()
+
+
+def _sync_run_rate_limit_counters(run: BackfillRun) -> None:
+    fresh = BackfillRun.get_by_id(run.id)
+    run.openfront_rate_limit_hit_count = fresh.openfront_rate_limit_hit_count
+    run.openfront_retry_after_count = fresh.openfront_retry_after_count
+    run.openfront_cooldown_seconds_total = fresh.openfront_cooldown_seconds_total
+    run.openfront_cooldown_seconds_max = fresh.openfront_cooldown_seconds_max
+
+
+def _record_openfront_rate_limit(
+    run_id: int,
+    event: OpenFrontRateLimitEvent,
+) -> None:
+    if event.status != 429:
+        return
+    retry_after_count = 1 if event.source != "fallback" else 0
+    (
+        BackfillRun.update(
+            openfront_rate_limit_hit_count=BackfillRun.openfront_rate_limit_hit_count + 1,
+            openfront_retry_after_count=(
+                BackfillRun.openfront_retry_after_count + retry_after_count
+            ),
+            openfront_cooldown_seconds_total=(
+                BackfillRun.openfront_cooldown_seconds_total + event.cooldown_seconds
+            ),
+            openfront_cooldown_seconds_max=fn.MAX(
+                BackfillRun.openfront_cooldown_seconds_max,
+                event.cooldown_seconds,
+            ),
+        )
+        .where(BackfillRun.id == run_id)
+        .execute()
+    )
+    LOGGER.warning(
+        "run=%s openfront_rate_limit status=%s retry_after=%s source=%s url=%s",
+        run_id,
+        event.status,
+        event.cooldown_seconds,
+        event.source,
+        event.url,
+    )
+
+
+def _attach_rate_limit_observer(client: object, observer) -> object:
+    add_observer = getattr(client, "add_rate_limit_observer", None)
+    if callable(add_observer):
+        return add_observer(observer)
+    set_observer = getattr(client, "set_rate_limit_observer", None)
+    if callable(set_observer):
+        previous = set_observer(observer)
+
+        def restore():
+            set_observer(previous)
+
+        return restore
+
+    def noop():
+        return None
+
+    return noop
+
+
+@contextmanager
+def track_backfill_run_rate_limits(client: object, run_id: int):
+    remover = _attach_rate_limit_observer(
+        client,
+        lambda event: _record_openfront_rate_limit(run_id, event),
+    )
+    try:
+        yield
+    finally:
+        remover()
 
 
 def _cache_payload(
@@ -312,6 +390,7 @@ def _should_skip_known_history(backfill_game: BackfillGame) -> bool:
 
 
 def _finalize_run(run: BackfillRun) -> None:
+    _sync_run_rate_limit_counters(run)
     remaining = (
         BackfillGame.select()
         .where((BackfillGame.run == run) & (BackfillGame.status == "pending"))
@@ -367,8 +446,62 @@ def create_backfill_run(
             source_key=tag,
             next_started_at=start,
             status="pending",
-        )
+    )
     return run
+
+
+async def _discover_team_cursor_games(
+    client: object,
+    run: BackfillRun,
+    cursor_id: int,
+    *,
+    window_size: timedelta,
+) -> int:
+    cursor = BackfillCursor.get_by_id(cursor_id)
+    discovered_count = 0
+    window_start = cursor.next_started_at or run.requested_start
+    while window_start <= run.requested_end:
+        window_end = _cursor_window_end(
+            window_start,
+            run.requested_end,
+            window_size,
+        )
+        LOGGER.info(
+            "run=%s source=team key=%s window_start=%s window_end=%s",
+            run.id,
+            cursor.source_key,
+            window_start.isoformat(),
+            window_end.isoformat(),
+        )
+        sessions = await client.fetch_clan_sessions(
+            cursor.source_key,
+            start=window_start,
+            end=window_end,
+        )
+        for session in sessions:
+            game_id = str(session.get("gameId") or "").strip()
+            if not game_id:
+                continue
+            started_at = _parse_api_datetime(session.get("gameStart"))
+            if not _in_start_range(started_at, run.requested_start, run.requested_end):
+                continue
+            if _queue_game(
+                run,
+                openfront_game_id=game_id,
+                source_type="team",
+                started_at=started_at,
+            ):
+                discovered_count += 1
+        _complete_or_advance_cursor(
+            cursor,
+            window_start=window_start,
+            window_end=window_end,
+            requested_end=run.requested_end,
+        )
+        if cursor.status == "completed":
+            break
+        window_start = cursor.next_started_at or run.requested_start
+    return discovered_count
 
 
 async def discover_team_games(
@@ -376,9 +509,9 @@ async def discover_team_games(
     run_id: int,
     *,
     window_size: timedelta = DISCOVERY_WINDOW,
+    concurrency: int = TEAM_DISCOVERY_CONCURRENCY,
 ) -> int:
     run = BackfillRun.get_by_id(run_id)
-    discovered_count = 0
     cursors = (
         BackfillCursor.select()
         .where(
@@ -388,52 +521,28 @@ async def discover_team_games(
         )
         .order_by(BackfillCursor.source_key)
     )
-    for cursor in cursors:
-        window_start = cursor.next_started_at or run.requested_start
-        while window_start <= run.requested_end:
-            window_end = _cursor_window_end(
-                window_start,
-                run.requested_end,
-                window_size,
+    semaphore = asyncio.Semaphore(max(1, concurrency))
+
+    async def discover_cursor(cursor_id: int) -> int:
+        async with semaphore:
+            return await _discover_team_cursor_games(
+                client,
+                run,
+                cursor_id,
+                window_size=window_size,
             )
-            LOGGER.info(
-                "run=%s source=team key=%s window_start=%s window_end=%s",
-                run.id,
-                cursor.source_key,
-                window_start.isoformat(),
-                window_end.isoformat(),
-            )
-            sessions = await client.fetch_clan_sessions(
-                cursor.source_key,
-                start=window_start,
-                end=window_end,
-            )
-            for session in sessions:
-                game_id = str(session.get("gameId") or "").strip()
-                if not game_id:
-                    continue
-                started_at = _parse_api_datetime(session.get("gameStart"))
-                if not _in_start_range(started_at, run.requested_start, run.requested_end):
-                    continue
-                if _queue_game(
-                    run,
-                    openfront_game_id=game_id,
-                    source_type="team",
-                    started_at=started_at,
-                ):
-                    discovered_count += 1
-            _complete_or_advance_cursor(
-                cursor,
-                window_start=window_start,
-                window_end=window_end,
-                requested_end=run.requested_end,
-            )
-            if cursor.status == "completed":
-                break
-            window_start = cursor.next_started_at or run.requested_start
+
+    discovered_count = sum(
+        await asyncio.gather(*(discover_cursor(cursor.id) for cursor in cursors))
+    )
     if discovered_count:
-        run.discovered_count += discovered_count
-        run.save()
+        (
+            BackfillRun.update(
+                discovered_count=BackfillRun.discovered_count + discovered_count
+            )
+            .where(BackfillRun.id == run.id)
+            .execute()
+        )
     LOGGER.info("run=%s source=team discovered=%s", run.id, discovered_count)
     return discovered_count
 
@@ -490,8 +599,13 @@ async def discover_ffa_games(
             break
         window_start = cursor.next_started_at or run.requested_start
     if discovered_count:
-        run.discovered_count += discovered_count
-        run.save()
+        (
+            BackfillRun.update(
+                discovered_count=BackfillRun.discovered_count + discovered_count
+            )
+            .where(BackfillRun.id == run.id)
+            .execute()
+        )
     LOGGER.info("run=%s source=ffa discovered=%s", run.id, discovered_count)
     return discovered_count
 
@@ -503,6 +617,7 @@ async def hydrate_backfill_run(
     concurrency: int = 4,
     refresh_batch_size: int = 100,
     progress_every: int = 100,
+    track_rate_limits: bool = True,
 ) -> BackfillRun:
     run = BackfillRun.get_by_id(run_id)
     run.status = "running"
@@ -552,45 +667,72 @@ async def hydrate_backfill_run(
             _record_success(run, backfill_game, cache_entry, summary.matched_guild_ids)
             return HydrationResult("completed", summary.matched_guild_ids)
 
-    affected_guild_ids: set[int] = set()
-    processed_successes = 0
-    batch_size = max(1, progress_every)
-    for offset in range(0, len(pending_games), batch_size):
-        batch = pending_games[offset : offset + batch_size]
-        results = await asyncio.gather(
-            *(process_game(game.id) for game in batch),
-            return_exceptions=True,
-        )
-        for backfill_game, result in zip(batch, results):
-            if isinstance(result, Exception):
-                try:
-                    _record_failure(run, backfill_game, str(result))
-                except Exception as record_exc:
-                    LOGGER.warning(
-                        "run=%s failed to persist failure for game=%s original=%s persistence=%s",
-                        run.id,
-                        backfill_game.openfront_game_id,
-                        result,
-                        record_exc,
-                    )
-                continue
-            if result.outcome == "skipped_known":
-                continue
-            if result.matched_guild_ids:
-                affected_guild_ids.update(result.matched_guild_ids)
-            processed_successes += 1
-            if (
-                processed_successes % max(1, refresh_batch_size) == 0
-                and affected_guild_ids
-            ):
-                run.refreshed_guild_count += _refresh_guild_batch(affected_guild_ids)
-                affected_guild_ids.clear()
-        run.save()
+    context = (
+        track_backfill_run_rate_limits(client, run.id)
+        if track_rate_limits
+        else nullcontext()
+    )
+    with context:
+        affected_guild_ids: set[int] = set()
+        processed_successes = 0
+        batch_size = max(1, progress_every)
+        for offset in range(0, len(pending_games), batch_size):
+            batch = pending_games[offset : offset + batch_size]
+            results = await asyncio.gather(
+                *(process_game(game.id) for game in batch),
+                return_exceptions=True,
+            )
+            for backfill_game, result in zip(batch, results):
+                if isinstance(result, Exception):
+                    try:
+                        _record_failure(run, backfill_game, str(result))
+                    except Exception as record_exc:
+                        LOGGER.warning(
+                            "run=%s failed to persist failure for game=%s original=%s persistence=%s",
+                            run.id,
+                            backfill_game.openfront_game_id,
+                            result,
+                            record_exc,
+                        )
+                    continue
+                if result.outcome == "skipped_known":
+                    continue
+                if result.matched_guild_ids:
+                    affected_guild_ids.update(result.matched_guild_ids)
+                processed_successes += 1
+                if (
+                    processed_successes % max(1, refresh_batch_size) == 0
+                    and affected_guild_ids
+                ):
+                    run.refreshed_guild_count += _refresh_guild_batch(affected_guild_ids)
+                    affected_guild_ids.clear()
+            _sync_run_rate_limit_counters(run)
+            run.save()
+            LOGGER.info(
+                "run=%s hydration_progress processed=%s total=%s cached=%s ingested=%s matched=%s skipped=%s failed=%s cache_failed=%s aggregate_refreshes=%s openfront_rate_limits=%s openfront_retry_after=%s openfront_cooldown_total=%s openfront_cooldown_max=%s",
+                run.id,
+                min(offset + len(batch), len(pending_games)),
+                len(pending_games),
+                run.cached_count,
+                run.ingested_count,
+                run.matched_count,
+                run.skipped_known_count,
+                run.failed_count,
+                run.cache_failure_count,
+                run.refreshed_guild_count,
+                run.openfront_rate_limit_hit_count,
+                run.openfront_retry_after_count,
+                run.openfront_cooldown_seconds_total,
+                run.openfront_cooldown_seconds_max,
+            )
+
+        if affected_guild_ids:
+            run.refreshed_guild_count += _refresh_guild_batch(affected_guild_ids)
+        _finalize_run(run)
         LOGGER.info(
-            "run=%s hydration_progress processed=%s total=%s cached=%s ingested=%s matched=%s skipped=%s failed=%s cache_failed=%s aggregate_refreshes=%s",
+            "run=%s hydration_complete status=%s cached=%s ingested=%s matched=%s skipped=%s failed=%s cache_failed=%s aggregate_refreshes=%s openfront_rate_limits=%s openfront_retry_after=%s openfront_cooldown_total=%s openfront_cooldown_max=%s",
             run.id,
-            min(offset + len(batch), len(pending_games)),
-            len(pending_games),
+            run.status,
             run.cached_count,
             run.ingested_count,
             run.matched_count,
@@ -598,23 +740,11 @@ async def hydrate_backfill_run(
             run.failed_count,
             run.cache_failure_count,
             run.refreshed_guild_count,
+            run.openfront_rate_limit_hit_count,
+            run.openfront_retry_after_count,
+            run.openfront_cooldown_seconds_total,
+            run.openfront_cooldown_seconds_max,
         )
-
-    if affected_guild_ids:
-        run.refreshed_guild_count += _refresh_guild_batch(affected_guild_ids)
-    _finalize_run(run)
-    LOGGER.info(
-        "run=%s hydration_complete status=%s cached=%s ingested=%s matched=%s skipped=%s failed=%s cache_failed=%s aggregate_refreshes=%s",
-        run.id,
-        run.status,
-        run.cached_count,
-        run.ingested_count,
-        run.matched_count,
-        run.skipped_known_count,
-        run.failed_count,
-        run.cache_failure_count,
-        run.refreshed_guild_count,
-    )
     return BackfillRun.get_by_id(run_id)
 
 

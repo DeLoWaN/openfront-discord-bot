@@ -81,6 +81,31 @@ def run_shared_migrations(database) -> None:
         ("backfill_runs", "skipped_known_count", "INTEGER NOT NULL DEFAULT 0"),
         ("backfill_runs", "replayed_count", "INTEGER NOT NULL DEFAULT 0"),
         ("backfill_runs", "cache_failure_count", "INTEGER NOT NULL DEFAULT 0"),
+        (
+            "backfill_runs",
+            "openfront_rate_limit_hit_count",
+            "INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "backfill_runs",
+            "openfront_retry_after_count",
+            "INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "backfill_runs",
+            "openfront_cooldown_seconds_total",
+            "DOUBLE NOT NULL DEFAULT 0",
+        ),
+        (
+            "backfill_runs",
+            "openfront_cooldown_seconds_max",
+            "DOUBLE NOT NULL DEFAULT 0",
+        ),
+        (
+            "openfront_rate_limit_state",
+            "active_leases",
+            "INTEGER NOT NULL DEFAULT 0",
+        ),
         ("backfill_games", "matched_guild_count", "INTEGER NOT NULL DEFAULT 0"),
         ("cached_openfront_games", "turn_payload_json", "LONGTEXT NULL"),
         ("game_participants", "attack_troops_total", "BIGINT NOT NULL DEFAULT 0"),

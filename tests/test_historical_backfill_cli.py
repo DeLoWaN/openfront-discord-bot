@@ -239,6 +239,77 @@ def test_historical_backfill_cli_can_reset_ingested_web_data(
     assert "deleted_guild_player_aggregates=1" in reset_output
 
 
+def test_historical_backfill_cli_start_reports_openfront_rate_limit_counters(
+    monkeypatch,
+    tmp_path,
+    capsys,
+):
+    from src.core.openfront import OpenFrontRateLimitEvent
+    from src.services.guild_sites import provision_guild_site
+
+    backfill_cli = patch_backfill_cli_runtime(monkeypatch, tmp_path)
+    provision_guild_site(
+        slug="north",
+        subdomain="north",
+        display_name="North",
+        clan_tags=["NU"],
+    )
+
+    class FakeClient:
+        def __init__(self):
+            self._observer = None
+
+        def set_rate_limit_observer(self, observer):
+            previous = self._observer
+            self._observer = observer
+            return previous
+
+        async def fetch_clan_sessions(self, clan_tag, start=None, end=None):
+            return [{"gameId": "team-1", "gameStart": "2026-03-01T10:00:00Z"}]
+
+        async def fetch_public_games(self, start, end, limit=1000):
+            return []
+
+        async def fetch_game(self, game_id, include_turns=False):
+            assert self._observer is not None
+            self._observer(
+                OpenFrontRateLimitEvent(
+                    status=429,
+                    cooldown_seconds=4.0,
+                    source="retry-after",
+                    url=f"/public/game/{game_id}",
+                )
+            )
+            return {
+                "info": {
+                    "gameID": game_id,
+                    "config": {"gameType": "Public", "gameMode": "Team"},
+                    "winner": ["team", "Team 1", "c1"],
+                    "players": [
+                        {"clientID": "c1", "username": "[NU] Ace", "clanTag": None}
+                    ],
+                },
+                "turns": [],
+            }
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(backfill_cli, "OpenFrontClient", lambda: FakeClient())
+
+    assert (
+        backfill_cli.main(["start", "--start", "2026-03-01", "--end", "2026-03-03"])
+        == 0
+    )
+    output = capsys.readouterr().out
+
+    assert "status=completed" in output
+    assert "openfront_rate_limits=1" in output
+    assert "openfront_retry_after=1" in output
+    assert "openfront_cooldown_total=4.0" in output
+    assert "openfront_cooldown_max=4.0" in output
+
+
 def test_historical_backfill_cli_status_reports_overlap_and_cache_counters(
     monkeypatch,
     tmp_path,
@@ -260,6 +331,10 @@ def test_historical_backfill_cli_status_reports_overlap_and_cache_counters(
         skipped_known_count=4,
         replayed_count=6,
         cache_failure_count=1,
+        openfront_rate_limit_hit_count=3,
+        openfront_retry_after_count=2,
+        openfront_cooldown_seconds_total=15.5,
+        openfront_cooldown_seconds_max=9.0,
     )
 
     assert backfill_cli.main(["status", "--run-id", str(run.id)]) == 0
@@ -270,3 +345,7 @@ def test_historical_backfill_cli_status_reports_overlap_and_cache_counters(
     assert "replayed=6" in output
     assert "cache_failed=1" in output
     assert "aggregate_refreshes=5" in output
+    assert "openfront_rate_limits=3" in output
+    assert "openfront_retry_after=2" in output
+    assert "openfront_cooldown_total=15.5" in output
+    assert "openfront_cooldown_max=9.0" in output

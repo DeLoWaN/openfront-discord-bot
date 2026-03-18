@@ -128,6 +128,18 @@ class FakeResponse:
             raise RuntimeError(f"unexpected status {self.status}")
 
 
+class WaitingResponse(FakeResponse):
+    def __init__(self, status, payload, started_event, release_event, headers=None):
+        super().__init__(status, payload, headers=headers)
+        self.started_event = started_event
+        self.release_event = release_event
+
+    async def __aenter__(self):
+        self.started_event.set()
+        await self.release_event.wait()
+        return self
+
+
 class QueueSession:
     def __init__(self, clock, responses):
         self.clock = clock
@@ -178,28 +190,87 @@ def test_fetch_game_retries_rate_limits_and_honors_retry_after(
     assert session.requests[1][2] - session.requests[0][2] == timedelta(seconds=3)
 
 
-def test_openfront_clients_share_global_success_cooldown(tmp_path, monkeypatch):
+def test_openfront_clients_allow_two_parallel_requests_and_throttle_third(
+    tmp_path, monkeypatch
+):
     setup_shared_database(tmp_path)
     clock = FakeClock(datetime(2026, 3, 14, 0, 0, 0))
-    session_one = QueueSession(clock, [FakeResponse(200, {"playerId": "p1"})])
-    session_two = QueueSession(clock, [FakeResponse(200, {"playerId": "p2"})])
+    first_started = asyncio.Event()
+    second_started = asyncio.Event()
+    release_first_two = asyncio.Event()
+    session_one = QueueSession(
+        clock,
+        [WaitingResponse(200, {"playerId": "p1"}, first_started, release_first_two)],
+    )
+    session_two = QueueSession(
+        clock,
+        [WaitingResponse(200, {"playerId": "p2"}, second_started, release_first_two)],
+    )
+    session_three = QueueSession(clock, [FakeResponse(200, {"playerId": "p3"})])
     client_one = OpenFrontClient(session=session_one)
     client_two = OpenFrontClient(session=session_two)
+    client_three = OpenFrontClient(session=session_three)
+
+    monkeypatch.setattr(openfront_module, "_utcnow_naive", clock.now)
+    original_sleep = asyncio.sleep
+
+    async def yielding_sleep(delay: float):
+        await clock.sleep(delay)
+        await original_sleep(0)
+
+    monkeypatch.setattr(openfront_module.asyncio, "sleep", yielding_sleep)
+
+    async def run_requests():
+        async def release_once_first_two_started():
+            await first_started.wait()
+            await second_started.wait()
+            release_first_two.set()
+
+        return await asyncio.gather(
+            release_once_first_two_started(),
+            client_one.fetch_player("player-1"),
+            client_two.fetch_player("player-2"),
+            client_three.fetch_player("player-3"),
+        )
+
+    _, first, second, third = asyncio.run(run_requests())
+
+    assert first["playerId"] == "p1"
+    assert second["playerId"] == "p2"
+    assert third["playerId"] == "p3"
+    request_times = sorted(
+        [
+            session_one.requests[0][2],
+            session_two.requests[0][2],
+            session_three.requests[0][2],
+        ]
+    )
+    assert request_times[1] - request_times[0] == timedelta(seconds=0)
+    assert request_times[2] - request_times[1] >= timedelta(seconds=0.5)
+    assert request_times[2] - request_times[1] < timedelta(seconds=1)
+    assert max(clock.sleep_calls) == 0.5
+
+
+def test_fetch_game_emits_rate_limit_event_with_retry_after(tmp_path, monkeypatch):
+    setup_shared_database(tmp_path)
+    clock = FakeClock(datetime(2026, 3, 14, 0, 0, 0))
+    session = QueueSession(
+        clock,
+        [
+            FakeResponse(429, {"error": "rate limited"}, {"Retry-After": "3"}),
+            FakeResponse(200, {"info": {"gameID": "g-rate"}}),
+        ],
+    )
+    events = []
+    client = OpenFrontClient(session=session, on_rate_limit=events.append)
 
     monkeypatch.setattr(openfront_module, "_utcnow_naive", clock.now)
     monkeypatch.setattr(openfront_module.asyncio, "sleep", clock.sleep)
 
-    async def run_requests():
-        return await asyncio.gather(
-            client_one.fetch_player("player-1"),
-            client_two.fetch_player("player-2"),
-        )
+    payload = asyncio.run(client.fetch_game("g-rate"))
 
-    first, second = asyncio.run(run_requests())
-
-    assert first["playerId"] == "p1"
-    assert second["playerId"] == "p2"
-    request_times = sorted(
-        [session_one.requests[0][2], session_two.requests[0][2]]
-    )
-    assert request_times[1] - request_times[0] == timedelta(seconds=1)
+    assert payload["info"]["gameID"] == "g-rate"
+    assert len(events) == 1
+    assert events[0].status == 429
+    assert events[0].cooldown_seconds == 3
+    assert events[0].source == "retry-after"

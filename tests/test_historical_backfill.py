@@ -422,6 +422,61 @@ def test_worker_runtime_backfill_and_resume_use_durable_runs(tmp_path):
     assert resumed_run.skipped_known_count == 1
 
 
+def test_worker_runtime_backfill_runs_team_and_ffa_discovery_concurrently(tmp_path):
+    from src.apps.worker.app import WorkerRuntime
+    from src.services.guild_sites import provision_guild_site
+
+    setup_shared_database(tmp_path)
+    provision_guild_site(
+        slug="north",
+        subdomain="north",
+        display_name="North",
+        clan_tags=["NU"],
+    )
+
+    class FakeClient:
+        def __init__(self):
+            self.team_saw_ffa = False
+            self.ffa_saw_team = False
+            self.team_started = asyncio.Event()
+            self.ffa_started = asyncio.Event()
+
+        async def fetch_clan_sessions(self, clan_tag, start=None, end=None):
+            self.team_started.set()
+            try:
+                await asyncio.wait_for(self.ffa_started.wait(), timeout=0.05)
+                self.team_saw_ffa = True
+            except TimeoutError:
+                self.team_saw_ffa = False
+            return []
+
+        async def fetch_public_games(self, start, end, limit=1000):
+            self.ffa_started.set()
+            try:
+                await asyncio.wait_for(self.team_started.wait(), timeout=0.05)
+                self.ffa_saw_team = True
+            except TimeoutError:
+                self.ffa_saw_team = False
+            return []
+
+        async def close(self):
+            return None
+
+    client = FakeClient()
+    worker = WorkerRuntime(client=client)
+
+    run = asyncio.run(
+        worker.backfill(
+            start=datetime(2026, 3, 1),
+            end=datetime(2026, 3, 3),
+        )
+    )
+
+    assert run.status == "completed"
+    assert client.team_saw_ffa is True
+    assert client.ffa_saw_team is True
+
+
 def test_hydrate_backfill_run_emits_progress_logs(tmp_path, caplog):
     from src.data.shared.models import BackfillGame
     from src.services.guild_sites import provision_guild_site
@@ -474,6 +529,73 @@ def test_hydrate_backfill_run_emits_progress_logs(tmp_path, caplog):
     assert any("skipped=0" in message for message in messages)
     assert any("cache_failed=0" in message for message in messages)
     assert any("aggregate_refreshes=" in message for message in messages)
+
+
+def test_hydrate_backfill_run_tracks_openfront_rate_limits(tmp_path, caplog):
+    from src.core.openfront import OpenFrontRateLimitEvent
+    from src.data.shared.models import BackfillGame
+    from src.services.historical_backfill import create_backfill_run, hydrate_backfill_run
+
+    setup_shared_database(tmp_path)
+
+    class FakeClient:
+        def __init__(self):
+            self.on_rate_limit = None
+
+        def set_rate_limit_observer(self, observer):
+            previous = self.on_rate_limit
+            self.on_rate_limit = observer
+            return previous
+
+        async def fetch_game(self, game_id, include_turns=False):
+            assert self.on_rate_limit is not None
+            self.on_rate_limit(
+                OpenFrontRateLimitEvent(
+                    status=429,
+                    cooldown_seconds=7.0,
+                    source="retry-after",
+                    url=f"/public/game/{game_id}",
+                )
+            )
+            return {
+                "info": {
+                    "gameID": game_id,
+                    "config": {"gameType": "Public", "gameMode": "Team"},
+                    "winner": ["team", "Team 2", "c9"],
+                    "players": [
+                        {"clientID": "c9", "username": "Enemy", "clanTag": "XYZ"}
+                    ],
+                }
+            }
+
+    run = create_backfill_run(
+        start=datetime(2026, 3, 1),
+        end=datetime(2026, 3, 3),
+    )
+    BackfillGame.create(
+        run=run,
+        openfront_game_id="throttled-game",
+        source_type="team",
+        status="pending",
+    )
+
+    with caplog.at_level("WARNING"):
+        hydrated = asyncio.run(
+            hydrate_backfill_run(
+                FakeClient(),
+                run.id,
+                progress_every=1,
+            )
+        )
+
+    assert hydrated.openfront_rate_limit_hit_count == 1
+    assert hydrated.openfront_retry_after_count == 1
+    assert hydrated.openfront_cooldown_seconds_total == 7.0
+    assert hydrated.openfront_cooldown_seconds_max == 7.0
+    messages = [record.message for record in caplog.records]
+    assert any("status=429" in message for message in messages)
+    assert any("retry_after=7.0" in message for message in messages)
+    assert any("source=retry-after" in message for message in messages)
 
 
 def test_hydrate_backfill_run_skips_games_completed_in_earlier_runs(tmp_path):

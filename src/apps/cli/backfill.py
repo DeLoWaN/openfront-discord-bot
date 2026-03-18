@@ -19,6 +19,7 @@ from ...services.historical_backfill import (
     hydrate_backfill_run,
     replay_backfill_run,
     reset_ingested_web_data,
+    track_backfill_run_rate_limits,
 )
 
 
@@ -48,7 +49,11 @@ def _run_summary(run: BackfillRun) -> str:
         f"ingested={run.ingested_count} matched={run.matched_count} "
         f"skipped={run.skipped_known_count} replayed={run.replayed_count} "
         f"failed={run.failed_count} cache_failed={run.cache_failure_count} "
-        f"aggregate_refreshes={run.refreshed_guild_count}"
+        f"aggregate_refreshes={run.refreshed_guild_count} "
+        f"openfront_rate_limits={run.openfront_rate_limit_hit_count} "
+        f"openfront_retry_after={run.openfront_retry_after_count} "
+        f"openfront_cooldown_total={run.openfront_cooldown_seconds_total} "
+        f"openfront_cooldown_max={run.openfront_cooldown_seconds_max}"
     )
 
 
@@ -91,17 +96,21 @@ async def _execute_run(
     client = OpenFrontClient()
     try:
         logging.info("Starting backfill run %s", run_id)
-        await discover_team_games(client, run_id)
-        await discover_ffa_games(client, run_id)
-        run = await hydrate_backfill_run(
-            client,
-            run_id,
-            concurrency=concurrency,
-            refresh_batch_size=refresh_batch_size,
-            progress_every=progress_every,
-        )
+        with track_backfill_run_rate_limits(client, run_id):
+            await asyncio.gather(
+                discover_team_games(client, run_id),
+                discover_ffa_games(client, run_id),
+            )
+            run = await hydrate_backfill_run(
+                client,
+                run_id,
+                concurrency=concurrency,
+                refresh_batch_size=refresh_batch_size,
+                progress_every=progress_every,
+                track_rate_limits=False,
+            )
         logging.info(
-            "Completed backfill run %s status=%s discovered=%s cached=%s ingested=%s matched=%s skipped=%s replayed=%s failed=%s cache_failed=%s aggregate_refreshes=%s",
+            "Completed backfill run %s status=%s discovered=%s cached=%s ingested=%s matched=%s skipped=%s replayed=%s failed=%s cache_failed=%s aggregate_refreshes=%s openfront_rate_limits=%s openfront_retry_after=%s openfront_cooldown_total=%s openfront_cooldown_max=%s",
             run.id,
             run.status,
             run.discovered_count,
@@ -113,6 +122,10 @@ async def _execute_run(
             run.failed_count,
             run.cache_failure_count,
             run.refreshed_guild_count,
+            run.openfront_rate_limit_hit_count,
+            run.openfront_retry_after_count,
+            run.openfront_cooldown_seconds_total,
+            run.openfront_cooldown_seconds_max,
         )
         return run
     finally:
