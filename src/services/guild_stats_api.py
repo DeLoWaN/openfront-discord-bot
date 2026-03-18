@@ -143,15 +143,32 @@ def _normalized_view(view: str) -> str:
 
 
 def _legacy_team_game_count(aggregate: GuildPlayerAggregate) -> int:
-    if aggregate.team_game_count:
-        return aggregate.team_game_count
+    if _has_scoped_public_counts(aggregate):
+        return int(aggregate.team_game_count or 0)
     return aggregate.game_count
 
 
 def _legacy_team_win_count(aggregate: GuildPlayerAggregate) -> int:
-    if aggregate.team_win_count:
-        return aggregate.team_win_count
+    if _has_scoped_public_counts(aggregate):
+        return int(aggregate.team_win_count or 0)
     return aggregate.win_count
+
+
+def _has_scoped_public_counts(aggregate: GuildPlayerAggregate) -> bool:
+    return any(
+        (
+            int(aggregate.team_win_count or 0),
+            int(aggregate.team_game_count or 0),
+            int(aggregate.ffa_win_count or 0),
+            int(aggregate.ffa_game_count or 0),
+            int(aggregate.team_recent_game_count_30d or 0),
+            int(aggregate.ffa_recent_game_count_30d or 0),
+            float(aggregate.team_score or 0.0),
+            float(aggregate.ffa_score or 0.0),
+            aggregate.last_team_game_at,
+            aggregate.last_ffa_game_at,
+        )
+    )
 
 
 def _row_payload(

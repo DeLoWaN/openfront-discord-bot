@@ -240,3 +240,46 @@ def test_guild_stats_api_excludes_invalid_public_aggregate_rows(tmp_path):
     assert ffa.status_code == 200
     assert [row["display_username"] for row in ffa.json()["rows"]] == ["Bolt", "Ace"]
     assert profile.status_code == 404
+
+
+def test_guild_stats_api_keeps_zero_team_win_rows_when_scoped_counts_are_valid(tmp_path):
+    from src.data.shared.models import GuildPlayerAggregate
+
+    client = make_client(tmp_path)
+    GuildPlayerAggregate.create(
+        guild=1,
+        normalized_username="dead",
+        display_username="[NU] Dead",
+        last_observed_clan_tag="NU",
+        win_count=2,
+        game_count=5,
+        team_win_count=0,
+        team_game_count=1,
+        ffa_win_count=2,
+        ffa_game_count=4,
+        team_score=35.0,
+        ffa_score=80.0,
+        team_recent_game_count_30d=1,
+        ffa_recent_game_count_30d=4,
+        donated_troops_total=0,
+        donated_gold_total=0,
+        donation_action_count=0,
+        support_bonus=0.0,
+        attack_troops_total=5000,
+        attack_action_count=1,
+        role_label="Flexible",
+        last_team_game_at=datetime(2026, 3, 16, 12, 0, 0),
+        last_ffa_game_at=datetime(2026, 3, 16, 13, 0, 0),
+        last_game_at=datetime(2026, 3, 16, 13, 0, 0),
+    )
+
+    team = client.get("/api/leaderboards/team", headers={"host": "north.example.test"})
+    profile = client.get("/api/players/dead", headers={"host": "north.example.test"})
+
+    assert team.status_code == 200
+    row = next(row for row in team.json()["rows"] if row["display_username"] == "Dead")
+    assert row["team_win_count"] == 0
+    assert row["team_game_count"] == 1
+    assert row["ratio"] == "0/1"
+    assert profile.status_code == 200
+    assert profile.json()["player"]["ratio"] == "0/1"
