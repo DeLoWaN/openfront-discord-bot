@@ -1135,7 +1135,7 @@ def test_replay_backfill_run_reports_unreadable_cache_failures(tmp_path):
     assert "cache" in queued.last_error.lower()
 
 
-def test_reset_ingested_web_data_clears_ingestion_tables_only(tmp_path):
+def test_reset_ingested_web_data_clears_ingestion_and_web_read_model_tables(tmp_path):
     from src.data.shared.models import (
         BackfillCursor,
         BackfillGame,
@@ -1144,7 +1144,14 @@ def test_reset_ingested_web_data_clears_ingestion_tables_only(tmp_path):
         GameParticipant,
         Guild,
         GuildClanTag,
+        GuildComboAggregate,
+        GuildComboMember,
+        GuildDailyBenchmark,
         GuildPlayerAggregate,
+        GuildPlayerBadge,
+        GuildPlayerDailySnapshot,
+        GuildRecentGameResult,
+        GuildWeeklyPlayerScore,
         ObservedGame,
         Player,
         PlayerAlias,
@@ -1203,6 +1210,76 @@ def test_reset_ingested_web_data_clears_ingestion_tables_only(tmp_path):
         win_count=1,
         game_count=1,
     )
+    GuildPlayerDailySnapshot.create(
+        guild=guild,
+        player=player,
+        normalized_username="ace",
+        display_username="Ace",
+        snapshot_date="2026-03-01",
+        scope="team",
+        score=10.0,
+        wins=1,
+        games=1,
+        win_rate=1.0,
+    )
+    GuildDailyBenchmark.create(
+        guild=guild,
+        snapshot_date="2026-03-01",
+        scope="team",
+        median_score=8.0,
+        leader_score=10.0,
+    )
+    GuildWeeklyPlayerScore.create(
+        guild=guild,
+        player=player,
+        normalized_username="ace",
+        display_username="Ace",
+        week_start="2026-02-23",
+        scope="team",
+        score=12.0,
+        wins=2,
+        games=2,
+        win_rate=1.0,
+    )
+    GuildRecentGameResult.create(
+        guild=guild,
+        game=observed_game,
+        openfront_game_id="game-1",
+        ended_at=datetime(2026, 3, 1, 12, 0, 0),
+        mode="Team",
+        result="win",
+        map_name="World",
+        format_label="Duos",
+        team_distribution="2 teams of 2 players",
+        replay_link="https://openfront.io/w0/game/game-1",
+        map_thumbnail_url="https://openfront.io/maps/world/thumbnail.webp",
+        guild_team_players_json='[{"display_username":"Ace"}]',
+        winner_players_json='{"guild":[{"display_username":"Ace"}],"other":[]}',
+    )
+    combo = GuildComboAggregate.create(
+        guild=guild,
+        format_slug="duo",
+        roster_key="ace|bolt",
+        games_together=1,
+        wins_together=1,
+        win_rate=1.0,
+        is_confirmed=0,
+    )
+    GuildComboMember.create(
+        combo=combo,
+        player=player,
+        normalized_username="ace",
+        display_username="Ace",
+        slot_index=0,
+    )
+    GuildPlayerBadge.create(
+        guild=guild,
+        player=player,
+        normalized_username="ace",
+        badge_code="field-marshal",
+        badge_level="bronze",
+        earned_at=datetime(2026, 3, 1, 12, 0, 0),
+    )
     run = create_backfill_run(
         start=datetime(2026, 3, 1),
         end=datetime(2026, 3, 5),
@@ -1231,7 +1308,14 @@ def test_reset_ingested_web_data_clears_ingestion_tables_only(tmp_path):
     assert summary.observed_games == 1
     assert summary.game_participants == 1
     assert summary.guild_player_aggregates == 1
-    assert summary.total_deleted >= 7
+    assert summary.guild_player_daily_snapshots == 1
+    assert summary.guild_daily_benchmarks == 1
+    assert summary.guild_weekly_player_scores == 1
+    assert summary.guild_recent_game_results == 1
+    assert summary.guild_combo_aggregates == 1
+    assert summary.guild_combo_members == 1
+    assert summary.guild_player_badges == 1
+    assert summary.total_deleted >= 14
 
     assert BackfillRun.select().count() == 0
     assert BackfillCursor.select().count() == 0
@@ -1240,6 +1324,13 @@ def test_reset_ingested_web_data_clears_ingestion_tables_only(tmp_path):
     assert ObservedGame.select().count() == 0
     assert GameParticipant.select().count() == 0
     assert GuildPlayerAggregate.select().count() == 0
+    assert GuildPlayerDailySnapshot.select().count() == 0
+    assert GuildDailyBenchmark.select().count() == 0
+    assert GuildWeeklyPlayerScore.select().count() == 0
+    assert GuildRecentGameResult.select().count() == 0
+    assert GuildComboAggregate.select().count() == 0
+    assert GuildComboMember.select().count() == 0
+    assert GuildPlayerBadge.select().count() == 0
 
     assert Guild.select().count() == 1
     assert GuildClanTag.select().count() == 1

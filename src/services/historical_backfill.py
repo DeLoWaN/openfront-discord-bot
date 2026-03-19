@@ -20,7 +20,14 @@ from ..data.shared.models import (
     CachedOpenFrontGame,
     GameParticipant,
     GuildClanTag,
+    GuildComboAggregate,
+    GuildComboMember,
+    GuildDailyBenchmark,
     GuildPlayerAggregate,
+    GuildPlayerBadge,
+    GuildPlayerDailySnapshot,
+    GuildRecentGameResult,
+    GuildWeeklyPlayerScore,
     ObservedGame,
 )
 from .openfront_ingestion import ingest_game_payload, refresh_guild_player_aggregates
@@ -39,6 +46,13 @@ class IngestedWebDataResetSummary:
     observed_games: int
     game_participants: int
     guild_player_aggregates: int
+    guild_player_daily_snapshots: int
+    guild_daily_benchmarks: int
+    guild_weekly_player_scores: int
+    guild_recent_game_results: int
+    guild_combo_aggregates: int
+    guild_combo_members: int
+    guild_player_badges: int
 
     @property
     def total_deleted(self) -> int:
@@ -50,6 +64,13 @@ class IngestedWebDataResetSummary:
             + self.observed_games
             + self.game_participants
             + self.guild_player_aggregates
+            + self.guild_player_daily_snapshots
+            + self.guild_daily_benchmarks
+            + self.guild_weekly_player_scores
+            + self.guild_recent_game_results
+            + self.guild_combo_aggregates
+            + self.guild_combo_members
+            + self.guild_player_badges
         )
 
 
@@ -459,6 +480,13 @@ def _lookup_cache_entry_by_game_id(
 
 def reset_ingested_web_data() -> IngestedWebDataResetSummary:
     with shared_database.atomic():
+        guild_combo_members = GuildComboMember.delete().execute()
+        guild_recent_game_results = GuildRecentGameResult.delete().execute()
+        guild_player_daily_snapshots = GuildPlayerDailySnapshot.delete().execute()
+        guild_daily_benchmarks = GuildDailyBenchmark.delete().execute()
+        guild_weekly_player_scores = GuildWeeklyPlayerScore.delete().execute()
+        guild_player_badges = GuildPlayerBadge.delete().execute()
+        guild_combo_aggregates = GuildComboAggregate.delete().execute()
         game_participants = GameParticipant.delete().execute()
         guild_player_aggregates = GuildPlayerAggregate.delete().execute()
         backfill_games = BackfillGame.delete().execute()
@@ -475,6 +503,13 @@ def reset_ingested_web_data() -> IngestedWebDataResetSummary:
         observed_games=observed_games,
         game_participants=game_participants,
         guild_player_aggregates=guild_player_aggregates,
+        guild_player_daily_snapshots=guild_player_daily_snapshots,
+        guild_daily_benchmarks=guild_daily_benchmarks,
+        guild_weekly_player_scores=guild_weekly_player_scores,
+        guild_recent_game_results=guild_recent_game_results,
+        guild_combo_aggregates=guild_combo_aggregates,
+        guild_combo_members=guild_combo_members,
+        guild_player_badges=guild_player_badges,
     )
 
 

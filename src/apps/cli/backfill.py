@@ -406,6 +406,20 @@ def run_command(args: argparse.Namespace) -> int:
                     f"deleted_game_participants={summary.game_participants}",
                     "deleted_guild_player_aggregates="
                     f"{summary.guild_player_aggregates}",
+                    "deleted_guild_player_daily_snapshots="
+                    f"{summary.guild_player_daily_snapshots}",
+                    "deleted_guild_daily_benchmarks="
+                    f"{summary.guild_daily_benchmarks}",
+                    "deleted_guild_weekly_player_scores="
+                    f"{summary.guild_weekly_player_scores}",
+                    "deleted_guild_recent_game_results="
+                    f"{summary.guild_recent_game_results}",
+                    "deleted_guild_combo_aggregates="
+                    f"{summary.guild_combo_aggregates}",
+                    "deleted_guild_combo_members="
+                    f"{summary.guild_combo_members}",
+                    "deleted_guild_player_badges="
+                    f"{summary.guild_player_badges}",
                     f"deleted_total={summary.total_deleted}",
                 )
             )

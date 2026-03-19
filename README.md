@@ -432,8 +432,8 @@ Operational notes:
 - ordinary `start` and `resume` flows skip readable previously hydrated history
   instead of reparsing it; `replay` remains the explicit reprocessing path
 - progress logs are emitted to stdout during discovery and hydration
-- `reset-data` clears ingestion/cache/backfill tables only and preserves guild
-  configuration plus linked account records
+- `reset-data` clears ingestion/cache/backfill tables plus rebuildable web read
+  models, while preserving guild configuration and linked account records
 
 Tuning flags:
 

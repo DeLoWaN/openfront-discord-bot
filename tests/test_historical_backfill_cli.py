@@ -177,7 +177,9 @@ def test_historical_backfill_cli_can_reset_ingested_web_data(
         BackfillGame,
         CachedOpenFrontGame,
         GameParticipant,
+        GuildDailyBenchmark,
         GuildPlayerAggregate,
+        GuildRecentGameResult,
         ObservedGame,
     )
     from src.services.guild_sites import provision_guild_site
@@ -212,6 +214,22 @@ def test_historical_backfill_cli_can_reset_ingested_web_data(
         win_count=1,
         game_count=1,
     )
+    GuildDailyBenchmark.create(
+        guild=guild,
+        snapshot_date="2026-03-01",
+        scope="team",
+        median_score=8.0,
+        leader_score=10.0,
+    )
+    GuildRecentGameResult.create(
+        guild=guild,
+        game=observed_game,
+        openfront_game_id="game-1",
+        mode="Team",
+        result="win",
+        format_label="Duos",
+        replay_link="https://openfront.io/w0/game/game-1",
+    )
     run = create_backfill_run(
         start=backfill_cli._parse_cli_datetime("2026-03-01"),
         end=backfill_cli._parse_cli_datetime("2026-03-03"),
@@ -239,6 +257,8 @@ def test_historical_backfill_cli_can_reset_ingested_web_data(
     assert "deleted_backfill_runs=1" in reset_output
     assert "deleted_observed_games=1" in reset_output
     assert "deleted_guild_player_aggregates=1" in reset_output
+    assert "deleted_guild_daily_benchmarks=1" in reset_output
+    assert "deleted_guild_recent_game_results=1" in reset_output
 
 
 def test_historical_backfill_cli_start_reports_openfront_rate_limit_counters(
